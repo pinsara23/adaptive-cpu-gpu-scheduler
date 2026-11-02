@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ Adaptive CPU–GPU Scheduler
+#  Adaptive CPU–GPU Scheduler
 
 ### An Architecture-Aware Adaptive Scheduling Framework for Heterogeneous Video Processing
 
@@ -105,7 +105,7 @@ The framework will investigate parallel execution across independent frames and 
 ##  Core Algorithms
 
 <details open>
-<summary><strong>⚡ A9 — GPU Resource Auto-Tuner</strong></summary>
+<summary><strong> A9 — GPU Resource Auto-Tuner</strong></summary>
 
 ### Objective
 
@@ -413,7 +413,7 @@ Technical documentation and research references will be maintained here as the i
 
 <div align="center">
 
-### ⚡ Building an intelligent bridge between CPU and GPU computing.
+###  Building an intelligent bridge between CPU and GPU computing.
 
 **Developed by [Pinsara Sarathchandra](https://github.com/pinsara23)**
 

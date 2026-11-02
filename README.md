@@ -1,131 +1,173 @@
-# Adaptive CPU–GPU Scheduler for Parallel Video Processing
+<div align="center">
 
-An architecture- and resource-aware adaptive scheduling framework for optimizing parallel video-processing pipelines on a single heterogeneous computing system.
+# ⚡ Adaptive CPU–GPU Scheduler
 
-## Overview
+### An Architecture-Aware Adaptive Scheduling Framework for Heterogeneous Video Processing
 
-This project explores adaptive workload scheduling across CPU and GPU resources to improve the performance and resource utilization of video-processing pipelines.
+**Making CPU and GPU work together intelligently.**
 
-Rather than relying on a fixed execution strategy, the proposed framework monitors system performance, estimates processing costs, and dynamically distributes workloads between CPU and GPU resources.
+<br>
 
-The system focuses on **pipeline parallelism, heterogeneous computing, GPU resource optimization, and adaptive workload scheduling**.
+![Status](https://img.shields.io/badge/Status-Under%20Development-orange?style=for-the-badge)
+![Language](https://img.shields.io/badge/Language-C%2B%2B-blue?style=for-the-badge)
+![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey?style=for-the-badge)
+![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900?style=for-the-badge)
+![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-The project is developed as part of a High Performance Computing (HPC) academic project.
+<br>
 
-## Project Objectives
+[Overview](#-overview) •
+[Architecture](#-system-architecture) •
+[Algorithms](#-core-algorithms) •
+[Benchmarking](#-performance-evaluation) •
+[Roadmap](#-development-roadmap)
 
-- Design and implement a parallel video-processing pipeline.
-- Investigate CPU multicore and GPU parallel execution.
-- Develop an adaptive CPU–GPU workload scheduling algorithm.
-- Implement GPU resource auto-tuning.
-- Explore concurrent CPU and GPU execution.
-- Monitor CPU, GPU, memory, and data-transfer utilization.
-- Evaluate different scheduling strategies using performance benchmarks.
-- Identify bottlenecks and optimize overall pipeline performance.
+</div>
+
+---
+
+##  Overview
+
+Modern video-processing workloads involve multiple computationally intensive operations. CPUs and GPUs have different architectural strengths, but using only one processor may leave valuable computing resources underutilized.
+
+**Adaptive CPU–GPU Scheduler** aims to address this problem through an adaptive scheduling framework that coordinates CPU and GPU execution on a single heterogeneous machine.
+
+Instead of relying on a fixed execution strategy, the framework estimates workload costs, monitors resource utilization, and dynamically determines how processing tasks should be distributed.
+
+###  Project Goals
+
+-  Develop parallel video-processing pipelines.
+-  Implement adaptive CPU–GPU workload scheduling.
+-  Automatically tune GPU execution resources.
+-  Overlap CPU and GPU computation where beneficial.
+-  Evaluate execution time and hardware resource utilization.
+-  Identify configurations that improve overall system performance.
+
+---
 
 ## System Architecture
 
-The proposed system consists of the following major components:
+The framework is organized around three major components:
 
-1. **Video Analyzer:** Extracts and validates video properties such as resolution, frame rate, duration, and frame count.
-2. **Video Decoder:** Decodes input video into frames.
-3. **Frame Queue Manager:** Manages frame batches, queues, and frame IDs.
-4. **Adaptive CPU–GPU Scheduler (A10):** Determines how processing workloads should be distributed between CPU and GPU.
-5. **GPU Resource Auto-Tuner (A9):** Evaluates GPU execution configurations such as CUDA streams, buffers, and frames in flight.
-6. **CPU Processing Workers:** Execute assigned processing tasks using CPU parallelism.
-7. **GPU Processing Workers:** Execute assigned workloads using CUDA.
-8. **Performance Monitor:** Collects execution times and hardware resource utilization.
-9. **Frame Reordering and Video Encoder:** Restores the correct frame order and produces the output video.
+| Component | Responsibility |
+|:---|:---|
+| **A9 – GPU Resource Auto-Tuner** | Determines suitable GPU execution configurations. |
+| **A10 – Adaptive CPU–GPU Scheduler** | Decides how workloads should be distributed between CPU and GPU. |
+| **A11 – Integrated Scheduler** | Combines scheduling and GPU auto-tuning into one system. |
 
-## Video Processing Pipeline
+### High-Level Architecture
+
+```mermaid
+flowchart TD
+    A[Input Video] --> B[Video Decoder]
+    B --> C[Frame Queue]
+    C --> D[Adaptive Scheduler]
+
+    D --> E[CPU Processing Worker]
+    D --> F[GPU Processing Worker]
+
+    F --> G[GPU Resource Auto-Tuner]
+    G --> F
+
+    E --> H[Result Queue]
+    F --> H
+
+    H --> I[Frame Reordering]
+    I --> J[Video Encoder]
+    J --> K[Output Video]
+
+    D -.-> L[Performance Monitor]
+    E -.-> L
+    F -.-> L
+    G -.-> L
+
+    L --> D
+```
+
+### Processing Pipeline
 
 The initial video-processing workload consists of the following stages:
 
-```text
-Input Video
-    |
-    v
-Video Decoding
-    |
-    v
-Frame Queue Manager
-    |
-    v
-Parallel Processing
-    |
-    +----------------------+
-    |                      |
-    v                      v
- CPU Workers           GPU Workers
-    |                      |
-    +----------+-----------+
-               |
-               v
-       Frame Reordering
-               |
-               v
-         Video Encoding
-               |
-               v
-         Output Video
+```mermaid
+flowchart LR
+    A[Decode] --> B[Resize]
+    B --> C[Gaussian Blur]
+    C --> D[CLAHE]
+    D --> E[Sobel Edge Detection]
+    E --> F[Sharpening]
+    F --> G[Encode]
 ```
 
-### Processing Stages
+The framework will investigate parallel execution across independent frames and pipeline stages.
 
-The planned image-processing operations are:
+---
 
-1. Frame decoding
-2. Image resizing
-3. Gaussian blur
-4. CLAHE (Contrast Limited Adaptive Histogram Equalization)
-5. Sobel edge detection
-6. Image sharpening
-7. Video encoding
+##  Core Algorithms
 
-Decoding, frame management, and encoding initially remain CPU-managed, while A10 focuses on adaptive distribution of image-processing workloads.
+<details open>
+<summary><strong>⚡ A9 — GPU Resource Auto-Tuner</strong></summary>
 
-## Core Algorithms
+### Objective
 
-### A9 — GPU Resource Auto-Tuner
+Automatically identify suitable GPU execution configurations for the current workload.
 
-A9 investigates suitable GPU execution configurations to improve GPU utilization and processing performance.
+GPU performance depends on several configuration parameters. Increasing the number of CUDA streams or buffers does not necessarily improve performance.
 
-Parameters include:
+### Parameters to Tune
 
-- CUDA stream count
-- Buffer count
-- Frames in flight
-- Batch size
-- Queue capacity
-- CPU–GPU execution overlap
+- CUDA stream count.
+- Frames in flight.
+- Batch size.
+- GPU buffer count.
+- Queue capacity.
+- CPU–GPU execution overlap.
 
-The tuner evaluates feasible configurations while considering GPU memory limitations and execution overhead.
+### General Workflow
 
-The objective is to identify efficient GPU configurations rather than assuming that increasing the number of CUDA streams always improves performance.
+```mermaid
+flowchart TD
+    A[Receive Workload] --> B[Generate Candidate Configurations]
+    B --> C[Execute Warm-up]
+    C --> D[Benchmark Configurations]
+    D --> E[Measure Execution and Resource Usage]
+    E --> F[Select Suitable Configuration]
+    F --> G[Apply Configuration]
+    G --> H[Monitor Performance]
+    H --> B
+```
 
-### A10 — Adaptive CPU–GPU Workload Scheduler
+The tuner will consider execution time, GPU memory usage, and resource contention when evaluating configurations.
 
-A10 dynamically distributes processing workloads across CPU and GPU resources.
+</details>
+
+<details open>
+<summary><strong> A10 — Adaptive CPU–GPU Workload Scheduler</strong></summary>
+
+### Objective
+
+Determine how much work should be assigned to the CPU and GPU based on estimated execution costs and current system conditions.
+
+The scheduler will evaluate three execution strategies:
+
+| Strategy | Description |
+|:---|:---|
+| CPU-only | CPU performs the image-processing workload. |
+| GPU-only | GPU performs the image-processing workload, while the CPU manages supporting operations. |
+| Hybrid | CPU and GPU process separate workloads concurrently. |
+
+### Cost Estimation
 
 The scheduler considers:
 
-- CPU processing time
-- GPU processing time
-- CPU–GPU data-transfer overhead
-- Synchronization overhead
-- CPU and GPU utilization
-- Queue conditions
-- Available memory and GPU resources
+- CPU computation time.
+- GPU computation time.
+- Host-to-device transfer time.
+- Device-to-host transfer time.
+- Synchronization overhead.
+- Queue waiting time.
+- Resource availability.
 
-The initial implementation uses performance measurements and cost estimation rather than machine learning.
-
-#### Initial Calibration
-
-The scheduler performs an initial calibration to estimate CPU and GPU processing performance.
-
-#### Adaptive Cost Estimation
-
-Execution-time estimates are updated using an Exponential Moving Average (EMA):
+The estimates will be updated using an Exponential Moving Average (EMA):
 
 \[
 E_{new} = \alpha T_{actual} + (1-\alpha)E_{old}
@@ -133,200 +175,248 @@ E_{new} = \alpha T_{actual} + (1-\alpha)E_{old}
 
 Where:
 
-- `E_new` — Updated execution-time estimate
-- `T_actual` — Latest measured execution time
-- `E_old` — Previous execution-time estimate
-- `α` — Weight assigned to the latest measurement
+- \(E_{new}\) = Updated execution-time estimate.
+- \(T_{actual}\) = Latest measured execution time.
+- \(E_{old}\) = Previous estimate.
+- \(\alpha\) = Smoothing factor.
 
-#### Scheduling Strategies
+This allows the scheduler to adapt its estimates as workload characteristics change.
 
-A10 evaluates three execution strategies:
+### Hybrid Execution Concept
 
-- **CPU-only:** Processing workloads execute on CPU resources.
-- **GPU-only:** Processing workloads execute on GPU resources, with CPU support for decoding, transfers, and encoding.
-- **Hybrid:** CPU and GPU process independent workloads concurrently.
+```mermaid
+flowchart TD
+    A[Incoming Frame Batches] --> B[Adaptive Scheduler]
 
-The scheduler uses estimated end-to-end execution costs to determine a suitable workload distribution.
+    B --> C[CPU Batch Queue]
+    B --> D[GPU Batch Queue]
 
-### A11 — Integrated Adaptive Scheduling Framework
+    C --> E[CPU Worker]
+    D --> F[GPU Worker]
 
-A11 integrates A9 and A10 into a unified scheduling framework.
+    E --> G[CPU Results]
+    F --> H[GPU Results]
 
-It combines:
+    G --> I[Result Collection]
+    H --> I
 
-- Adaptive CPU–GPU workload distribution
-- GPU resource auto-tuning
-- Performance monitoring
-- Queue management
-- Cost estimation
-- Resource-aware execution decisions
+    I --> J[Frame Reordering]
+```
 
-## Parallel Execution Strategies
+The CPU and GPU can process different independent batches simultaneously rather than waiting for one processor to finish all its work before the other starts.
 
-The framework will evaluate several execution approaches:
+</details>
 
-| Strategy | Description |
-|---|---|
-| Sequential CPU | Processes the pipeline sequentially |
-| Multithreaded CPU | Uses multiple CPU threads |
-| Fixed GPU | Uses a predefined GPU configuration |
-| Fixed Hybrid | Uses a predefined CPU–GPU workload distribution |
-| Adaptive CPU–GPU | Dynamically adjusts workload distribution |
-| Adaptive Integrated | Combines A9 and A10 |
+<details open>
+<summary><strong>🔗 A11 — Integrated Adaptive Scheduler</strong></summary>
 
-Both pipeline parallelism and data parallelism will be investigated.
+### Objective
 
-## Performance Evaluation
+Integrate A9 and A10 into a unified scheduling framework.
 
-The framework will be evaluated using controlled experiments.
+The integrated system will coordinate:
+
+1. Workload distribution between CPU and GPU.
+2. GPU execution configuration.
+3. Resource monitoring.
+4. Execution-time estimation.
+5. Adaptive configuration updates.
+
+The goal is to improve end-to-end pipeline performance rather than optimize an isolated processing stage.
+
+</details>
+
+---
+
+##  Performance Evaluation
+
+Performance evaluation is a central part of this project.
+
+The framework will compare multiple execution strategies under controlled workloads.
+
+### Planned Baselines
+
+| Configuration | Description |
+|:---|:---|
+| Sequential CPU | Single-threaded CPU execution. |
+| Multithreaded CPU | Parallel CPU execution. |
+| Static CPU | Fixed CPU worker configuration. |
+| GPU | GPU-based image processing. |
+| GPU Streams | Different CUDA stream configurations. |
+| Hybrid | Concurrent CPU and GPU processing. |
+| Adaptive | Scheduling using A10 and A9. |
 
 ### Performance Metrics
 
 | Metric | Purpose |
-|---|---|
-| Total execution time | Overall processing performance |
-| Throughput (FPS) | Frames processed per second |
-| Stage execution time | Identifies pipeline bottlenecks |
-| CPU utilization | Measures CPU resource usage |
-| GPU utilization | Measures GPU resource usage |
-| RAM consumption | Measures system memory usage |
-| VRAM consumption | Measures GPU memory usage |
-| Data-transfer time | Evaluates CPU–GPU transfer overhead |
-| Synchronization overhead | Measures coordination costs |
-| Scheduling overhead | Evaluates adaptive scheduling costs |
+|:---|:---|
+| Execution Time | Measure total processing time. |
+| Throughput | Measure frames processed per second. |
+| CPU Utilization | Evaluate CPU resource usage. |
+| GPU Utilization | Evaluate GPU activity. |
+| RAM Usage | Monitor host memory consumption. |
+| VRAM Usage | Monitor GPU memory consumption. |
+| Transfer Time | Measure CPU–GPU data transfer overhead. |
+| LLC Cache Misses | Investigate CPU cache behavior. |
+| Resource Overlap | Evaluate concurrent CPU–GPU execution. |
 
-### Benchmarking Methodology
+### Benchmark Results
 
-- Use identical input videos across execution strategies.
-- Separate initial calibration and warm-up from measured runs.
-- Repeat experiments to reduce measurement variability.
-- Verify output correctness and frame ordering.
-- Record hardware utilization and execution metrics.
-- Compare fixed and adaptive scheduling approaches.
+>  Benchmark results will be added after implementation and controlled experiments.
 
-No performance improvements will be assumed before experimental validation.
+| Execution Strategy | Execution Time | Throughput | CPU Usage | GPU Usage |
+|:---|:---:|:---:|:---:|:---:|
+| Sequential CPU | TBD | TBD | TBD | N/A |
+| Multithreaded CPU | TBD | TBD | TBD | N/A |
+| GPU | TBD | TBD | TBD | TBD |
+| Hybrid | TBD | TBD | TBD | TBD |
+| Adaptive | TBD | TBD | TBD | TBD |
+
+---
+
+## Technology Stack
+
+| Technology | Purpose |
+|:---|:---|
+| C++ | Core implementation |
+| CUDA C++ | GPU computation |
+| OpenCV | Video and image processing |
+| OpenMP | CPU parallel processing |
+| CMake | Build configuration |
+| Linux / Ubuntu | Development environment |
+| NVIDIA Nsight Systems | Performance profiling |
+| Git | Version control |
+
+*The technology stack may evolve during implementation.*
+
+---
 
 ## Development Environment
 
-Initial development hardware:
+The initial development and evaluation environment includes:
 
-| Component | Specification |
-|---|---|
+| Component | Hardware |
+|:---|:---|
 | CPU | Intel Core i7-12700H |
 | GPU | NVIDIA GeForce RTX 3050 Laptop GPU |
 | GPU Memory | 4 GB |
 | System RAM | 16 GB |
 | Operating System | Ubuntu Linux |
 
-Additional testing may be performed on university systems equipped with NVIDIA RTX 2060 GPUs.
+Additional experiments may be conducted using university machines equipped with NVIDIA RTX 2060 GPUs.
 
-### Technologies
+---
 
-The planned technology stack includes:
+## Development Roadmap
 
-- C++
-- CUDA C++
-- OpenMP
-- OpenCV
-- FFmpeg / FFprobe
-- CMake
-- NVIDIA Nsight Systems
-- Linux performance-monitoring tools
+- [x] Project repository initialization
+- [x] Initial project architecture and objectives
+- [ ] CUDA and CPU parallel-processing foundations
+- [ ] Video-processing pipeline implementation
+- [ ] Sequential CPU baseline
+- [ ] Multithreaded CPU baseline
+- [ ] GPU processing implementation
+- [ ] A9: GPU Resource Auto-Tuner
+- [ ] A10: Adaptive CPU–GPU Scheduler
+- [ ] Hybrid execution implementation
+- [ ] A11: Integrated scheduling framework
+- [ ] Performance profiling and benchmarking
+- [ ] Experimental analysis and optimization
+- [ ] Final demonstration and documentation
 
-## Project Development Roadmap
+---
 
-The project is divided into two academic semesters.
+## Project Structure
 
-### Semester 1 — Algorithm Development and Initial Integration
-
-- [ ] Set up the development environment.
-- [ ] Implement the video-processing pipeline.
-- [ ] Develop sequential and multithreaded CPU baselines.
-- [ ] Implement GPU processing baselines.
-- [ ] Develop initial A9 GPU resource auto-tuning.
-- [ ] Develop initial A10 adaptive CPU–GPU scheduling.
-- [ ] Perform initial integration and testing.
-
-### Semester 2 — Evaluation and Optimization
-
-- [ ] Integrate A9 and A10 into A11.
-- [ ] Implement detailed performance monitoring.
-- [ ] Conduct controlled benchmarking experiments.
-- [ ] Evaluate resource utilization.
-- [ ] Analyze scheduling overhead and bottlenecks.
-- [ ] Refine scheduling and tuning strategies.
-- [ ] Complete final testing, documentation, and demonstration.
-
-## Repository Structure
-
-The proposed repository structure is:
+The repository structure will evolve as the implementation progresses.
 
 ```text
 adaptive-cpu-gpu-scheduler/
 │
 ├── README.md
+├── LICENSE
 │
 ├── docs/
 │   ├── architecture/
-│   ├── algorithms/
-│   ├── methodology/
 │   └── reports/
 │
 ├── src/
-│   ├── decoder/
 │   ├── pipeline/
-│   ├── scheduler/
-│   │   ├── a10/
-│   │   └── a11/
-│   ├── gpu_tuner/
-│   │   └── a9/
 │   ├── cpu/
 │   ├── gpu/
-│   ├── encoder/
+│   ├── scheduler/
+│   ├── tuner/
 │   └── monitoring/
 │
-├── benchmarks/
-│   ├── cpu/
-│   ├── gpu/
-│   ├── hybrid/
-│   └── results/
+├── include/
 │
 ├── tests/
 │
-├── scripts/
+├── benchmarks/
 │
-├── configs/
+├── scripts/
 │
 └── CMakeLists.txt
 ```
 
-This is the planned structure and may evolve during implementation
+---
 
-## Expected Outcomes
+## Getting Started
 
-The project aims to deliver:
+Implementation and build instructions will be added as the initial pipeline and processing modules become available.
 
-- A parallel video-processing framework.
-- A GPU resource auto-tuning algorithm.
-- An adaptive CPU–GPU workload scheduling algorithm.
-- An integrated scheduling framework.
-- A performance evaluation comparing multiple execution strategies.
-- An analysis of resource utilization, execution overhead, and scheduling effectiveness.
+### Prerequisites
 
-## References
+- Ubuntu Linux
+- C++ compiler
+- CMake
+- NVIDIA GPU with compatible CUDA support
+- CUDA Toolkit
+- OpenCV
 
-- [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
-- [OpenMP Specifications](https://www.openmp.org/specifications/)
-- [OpenCV Documentation](https://docs.opencv.org/)
-- [NVIDIA Nsight Systems Documentation](https://docs.nvidia.com/nsight-systems/)
-- [FFmpeg Documentation](https://ffmpeg.org/documentation.html)
+### Future Build Instructions
 
-## Project Status
+```bash
+# Clone the repository
+git clone git@github.com:pinsara23/adaptive-cpu-gpu-scheduler.git
 
-**Status:** Under Development
+# Enter the project directory
+cd adaptive-cpu-gpu-scheduler
 
-This project is being developed incrementally, with algorithm implementation, integration, benchmarking, and optimization planned across two academic semesters.
+# Configure the project
+cmake -S . -B build
+
+# Build
+cmake --build build -j$(nproc)
+```
 
 ---
 
-**Adaptive CPU–GPU Scheduling | Parallel Computing | High Performance Computing**
+## Project Information
+
+This is a five-credit High Performance Computing project conducted over two academic semesters.
+
+**Primary focus:** Parallel computing, heterogeneous computing, resource-aware scheduling, and performance optimization.
+
+---
+
+##  References
+
+Technical documentation and research references will be maintained here as the implementation and literature review progress.
+
+- [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
+- [NVIDIA Nsight Systems Documentation](https://docs.nvidia.com/nsight-systems/)
+- [OpenCV Documentation](https://docs.opencv.org/)
+- [OpenMP Documentation](https://www.openmp.org/specifications/)
+
+---
+
+<div align="center">
+
+### ⚡ Building an intelligent bridge between CPU and GPU computing.
+
+**Developed by [Pinsara Sarathchandra](https://github.com/pinsara23)**
+
+[GitHub Repository](https://github.com/pinsara23/adaptive-cpu-gpu-scheduler)
+
+</div>

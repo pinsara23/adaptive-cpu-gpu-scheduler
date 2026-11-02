@@ -2,7 +2,7 @@
 
 #  Adaptive CPU–GPU Scheduler
 
-### An Architecture-Aware Adaptive Scheduling Framework for Heterogeneous Video Processing
+### An Architecture Aware Adaptive Scheduling Framework for Heterogeneous Video Processing
 
 **Making CPU and GPU work together intelligently.**
 
@@ -394,7 +394,7 @@ cmake --build build -j$(nproc)
 
 ## Project Information
 
-This is a five-credit High Performance Computing project conducted over two academic semesters.
+This is a five credit High Performance Computing project conducted over two academic semesters.
 
 **Primary focus:** Parallel computing, heterogeneous computing, resource-aware scheduling, and performance optimization.
 

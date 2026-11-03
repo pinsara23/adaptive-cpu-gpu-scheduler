@@ -1,0 +1,148 @@
+# ==========================================
+# Build directories
+# ==========================================
+
+build/
+build-*/
+cmake-build-*/
+out/
+dist/
+
+# ==========================================
+# CMake generated files
+# ==========================================
+
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# ==========================================
+# Compiled binaries and object files
+# ==========================================
+
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.bin
+
+# CUDA generated files
+*.cubin
+*.fatbin
+*.ptx
+*.cudafe*
+*.fatbin.c
+*.gpu
+*.nvlink
+*.ptxinfo
+
+# ==========================================
+# Debugging and profiling
+# ==========================================
+
+core
+core.*
+*.core
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.nvvp
+*.ncu-rep
+*.prof
+*.profraw
+*.profdata
+
+# ==========================================
+# Benchmark outputs
+# ==========================================
+
+# Keep benchmark source code and scripts.
+# Ignore generated results and temporary data.
+
+benchmarks/results/
+benchmarks/output/
+benchmark_results/
+performance_logs/
+profiling_results/
+
+*.log
+*.tmp
+
+# ==========================================
+# Video and image data
+# ==========================================
+
+# Keep sample media small and intentional.
+# Store large datasets separately.
+
+data/
+datasets/
+videos/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.raw
+
+# ==========================================
+# IDE and editor files
+# ==========================================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==========================================
+# Operating system files
+# ==========================================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# Python auxiliary scripts
+# ==========================================
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# ==========================================
+# Temporary files
+# ==========================================
+
+*.bak
+*.old
+*.orig
+*.rej
+*.temp
+
+# ==========================================
+# Environment and local configuration
+# ==========================================
+
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# Local machine configuration
+# ==========================================
+
+*.local
+local_config.*

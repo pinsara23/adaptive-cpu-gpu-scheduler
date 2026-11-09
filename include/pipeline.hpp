@@ -3,3 +3,6 @@
 
 // A0: Sequential Reference
 void run_sequential_pipeline(const std::string& input_path, const std::string& output_path);
+
+// A1: Single core Single thread CPU pipeline
+void run_a1_single_core_pipeline(const std::string& input_path, const std::string& output_path);

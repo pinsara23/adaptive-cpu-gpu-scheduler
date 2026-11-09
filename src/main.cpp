@@ -1,74 +1,26 @@
 #include <iostream>
-#include <chrono>
-#include <opencv2/opencv.hpp>
-#include "filters.hpp"
+#include <string>
+#include "pipeline.hpp"
 
-int main() {
-    std::cout << "Starting Sequential Video Pipeline (Baseline)..." << std::endl;
+int main(int argc, char** argv) {
+    // Default to A0 if the user doesn't type an algorithm name
+    std::string algo = "A0"; 
+    if (argc > 1) {
+        algo = argv[1];
+    }
 
-    // Open input video
     std::string input_path = "../videos/input.mp4";
-    cv::VideoCapture cap(input_path);
-    
-    if (!cap.isOpened()) {
-        std::cerr << "Error: Could not open video at " << input_path << "\n";
+    std::string output_path = "../output/output_" + algo + ".mp4"; // Saves as output_A0.mp4, output_A1.mp4, etc.
+
+    if (algo == "A0") {
+        std::cout << "Executing Algorithm A0: Sequential Baseline...\n";
+        run_sequential_pipeline(input_path, output_path);
+    } 
+    else {
+        std::cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";
+        std::cerr << "Usage: ./video_pipeline [A0|A1|A2...]\n";
         return -1;
     }
-
-    // Get video properties
-    double fps = cap.get(cv::CAP_PROP_FPS);
-    int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
-    
-    // We will standardise the workload to 1280x720 resolution
-    int target_width = 1280;
-    int target_height = 720;
-
-    // Setup VideoWriter (isColor = false, because our pipeline output is grayscale)
-    std::string output_path = "../output/output_sequential.mp4";
-    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
-                           fps, cv::Size(target_width, target_height), false);
-
-    if (!writer.isOpened()) {
-        std::cerr << "Error: Could not create output video writer.\n";
-        return -1;
-    }
-
-    int frames_processed = 0;
-    cv::Mat frame;
-
-    // Start timing using high resolution clock
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    while (cap.read(frame)) {
-        if (frame.empty()) break;
-
-        // Execute Pipeline
-        cv::Mat resized   = filters::resize_frame(frame, target_width, target_height);
-        cv::Mat blurred   = filters::apply_blur(resized);
-        cv::Mat clahe_out = filters::apply_clahe(blurred);
-        cv::Mat sobel_out = filters::apply_sobel(clahe_out);
-        cv::Mat sharpened = filters::apply_sharpen(sobel_out);
-
-        // Write output
-        writer.write(sharpened);
-        frames_processed++;
-
-        if (frames_processed % 50 == 0) {
-            std::cout << "Processed " << frames_processed << " / " << total_frames << " frames...\n";
-        }
-    }
-
-    // End timing
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-
-    cap.release();
-    writer.release();
-
-    std::cout << "Pipeline finished successfully.\n";
-    std::cout << "Total Frames Processed: " << frames_processed << "\n";
-    std::cout << "Total Execution Time:   " << elapsed.count() << " seconds\n";
-    std::cout << "Average Throughput:     " << frames_processed / elapsed.count() << " FPS\n";
 
     return 0;
 }

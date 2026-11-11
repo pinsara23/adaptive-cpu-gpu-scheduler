@@ -21,6 +21,13 @@ int main(int argc, char** argv) {
     else if (algo == "A1"){
         cout << "Executing Algorithm A1: Single Core Pipeline Baseline...\n";
         run_a1_single_core_pipeline(input_path, output_path);
+    }
+    else if (algo == "A3") {
+        int num_workers = 4; // Default number of workers
+        if (argc > 2) {
+            num_workers = stoi(argv[2]);
+        }
+        run_a3_static_multicore_pipeline(input_path, output_path, num_workers);
     } 
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";

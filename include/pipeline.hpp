@@ -6,3 +6,6 @@ void run_sequential_pipeline(const std::string& input_path, const std::string& o
 
 // A1: Single core Single thread CPU pipeline
 void run_a1_single_core_pipeline(const std::string& input_path, const std::string& output_path);
+
+// A3: Static Multicore Scheduling
+void run_a3_static_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);

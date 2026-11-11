@@ -14,7 +14,7 @@ find_package(OpenCV REQUIRED)
 include_directories(include ${OpenCV_INCLUDE_DIRS})
 
 # Add our source files
-add_executable(video_pipeline src/main.cpp src/filters.cpp src/trace_manager.cpp src/pipeline.cpp)
+add_executable(video_pipeline src/main.cpp src/filters.cpp src/trace_manager.cpp src/pipeline.cpp src/frame_reorder.cpp)
 
 # Link OpenCV libraries to our executable
 target_link_libraries(video_pipeline ${OpenCV_LIBS})

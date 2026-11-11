@@ -31,6 +31,13 @@ int main(int argc, char** argv) {
             num_workers = stoi(argv[2]);
         }
         run_a3_static_multicore_pipeline(input_path, output_path, num_workers);
+    }
+    else if (algo == "A4") {
+        int num_workers = 4; // Default number of workers
+        if (argc > 2) {
+            num_workers = stoi(argv[2]);
+        }
+        run_a4_dynamic_multicore_pipeline(input_path, output_path, num_workers);
     } 
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";

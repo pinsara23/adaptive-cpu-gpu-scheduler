@@ -12,3 +12,6 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
 
 // A2: Single-Core SMT (2 threads on 1 physical core)
 void run_a2_smt_pipeline(const std::string& input_path, const std::string& output_path);
+
+// A4: Dynamic Multicore Scheduling (Shared Queue)
+void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);

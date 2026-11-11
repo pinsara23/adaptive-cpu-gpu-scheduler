@@ -394,3 +394,100 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
+
+void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers){
+    
+    // The Main Thread pushes decoded frames into this one central queue.
+
+    // All workers (fast and slow) constantly check this queue.
+
+    // The moment a worker finishes a frame, it immediately grabs the next available frame from the queue.
+
+    std::cout << "Executing A4: Dynamic Multicore Pipeline with " << num_workers << " workers...\n";
+    TraceManager tracer("../traces/a4_trace.csv");
+
+    cv::VideoCapture cap(input_path);
+    if (!cap.isOpened()) return;
+
+    int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
+    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
+                           cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
+
+    FrameReorder reorder(writer, tracer);
+
+    // 1. create 1 shared queue for all workers (bound to hold max 20 frames)
+    auto shared_queue = std::make_shared<BoundedQueue<FrameTask>>(20);
+
+    // 2. Define the worker logic (Dynamic polling)
+    auto worker_func = [&](int worker_id){
+        std::string worker_name = "CPU_W" + std::to_string(worker_id);
+        FrameTask task;
+
+        while(shared_queue->pop(task)){
+            tracer.recordEvent(task.frame_id, "resize", "start", worker_name);
+            cv::Mat resized = filters::resize_frame(task.input_frame, 1280, 720);
+            tracer.recordEvent(task.frame_id, "resize", "end", worker_name);
+
+            tracer.recordEvent(task.frame_id, "blur", "start", worker_name);
+            cv::Mat blurred = filters::apply_blur(resized);
+            tracer.recordEvent(task.frame_id, "blur", "end", worker_name);
+
+            tracer.recordEvent(task.frame_id, "clahe", "start", worker_name);
+            cv::Mat clahe = filters::apply_clahe(blurred);
+            tracer.recordEvent(task.frame_id, "clahe", "end", worker_name);
+
+            tracer.recordEvent(task.frame_id, "sobel", "start", worker_name);
+            cv::Mat sobel = filters::apply_sobel(clahe);
+            tracer.recordEvent(task.frame_id, "sobel", "end", worker_name);
+
+            tracer.recordEvent(task.frame_id, "sharpen", "start", worker_name);
+            task.output_frame = filters::apply_sharpen(sobel);
+            tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
+
+            // Send to reorder buffer
+            reorder.push_and_write(task);
+        }
+    };
+
+    // 3. Launch the threads
+    std::vector<std::thread> threads;
+    for(int i=0; i<num_workers; i++){
+        threads.emplace_back(worker_func, i);
+    }
+    
+    // 4. Main thread reads frame and pushes to the single queue
+    int current_frame_id = 0;
+    cv::Mat raw_frame;
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    while (cap.read(raw_frame)) {
+        if (raw_frame.empty()) break;
+        FrameTask task;
+        task.frame_id = current_frame_id;
+        task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
+        task.input_frame = raw_frame;
+
+        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
+
+        shared_queue->push(task);
+
+        current_frame_id++;
+        if (current_frame_id % 50 == 0) {
+            std::cout << "Decoded & Dispatched " << current_frame_id << " / " << total_frames << " frames...\n";
+        }
+    }
+
+    // 5. Cleanup
+    shared_queue->finish();
+    for (auto& t : threads) t.join();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    
+    cap.release(); 
+    writer.release(); 
+    tracer.flush();
+    std::cout << "Pipeline A4 finished successfully.\n";
+    std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+}

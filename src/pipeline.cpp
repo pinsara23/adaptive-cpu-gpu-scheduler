@@ -6,6 +6,7 @@
 #include <thread>
 #include <vector>
 #include <memory>
+#include <fstream>
 
 #include "filters.hpp"
 #include "frame_task.hpp"
@@ -182,6 +183,120 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
     cout << "Pipeline A1 finished successfully.\n";
     cout << "Total Frames: " << current_frame_id << "\n";
     cout << "Total Time:   " << elapsed.count() << " seconds\n";
+}
+
+void run_a2_smt_pipeline(const std::string& input_path, const std::string& output_path) {
+    std::cout << "Executing A2: Single-Core SMT (Hyper-Threading)...\n";
+    
+    // 1. Hardware-Aware Topology Read: Find the sibling thread for physical Core 0
+    int sibling1 = 0;
+    int sibling2 = 1; // Fallback
+    std::ifstream sibling_file("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list");
+    if (sibling_file.is_open()) {
+        std::string line;
+        std::getline(sibling_file, line);
+        size_t sep = line.find_first_of(",-");
+        if (sep != std::string::npos) {
+            sibling1 = std::stoi(line.substr(0, sep));
+            sibling2 = std::stoi(line.substr(sep + 1));
+        }
+    }
+    std::cout << "Hardware Topology: Physical Core 0 maps to logical threads CPU " << sibling1 << " and CPU " << sibling2 << "\n";
+
+    TraceManager tracer("../traces/a2_trace.csv");
+    cv::VideoCapture cap(input_path);
+    if (!cap.isOpened()) return;
+
+    int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
+    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
+                           cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
+
+    FrameReorder reorder(writer, tracer);
+    
+    // 2. Create exactly 2 queues for the 2 SMT threads
+    int num_workers = 2;
+    std::vector<std::shared_ptr<BoundedQueue<FrameTask>>> queues;
+    for (int i = 0; i < num_workers; ++i) {
+        queues.push_back(std::make_shared<BoundedQueue<FrameTask>>(10));
+    }
+
+    // 3. Worker Logic with SMT Pinning
+    auto worker_func = [&](int worker_id) {
+        // Lock this thread specifically to the physical core's logical threads
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(sibling1, &cpuset);
+        CPU_SET(sibling2, &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+        std::string worker_name = "CPU_SMT_" + std::to_string(worker_id);
+        FrameTask task;
+        
+        while (queues[worker_id]->pop(task)) {
+            tracer.recordEvent(task.frame_id, "resize", "start", worker_name);
+            cv::Mat resized = filters::resize_frame(task.input_frame, 1280, 720);
+            tracer.recordEvent(task.frame_id, "resize", "end", worker_name);
+            
+            tracer.recordEvent(task.frame_id, "blur", "start", worker_name);
+            cv::Mat blurred = filters::apply_blur(resized);
+            tracer.recordEvent(task.frame_id, "blur", "end", worker_name);
+            
+            tracer.recordEvent(task.frame_id, "clahe", "start", worker_name);
+            cv::Mat clahe = filters::apply_clahe(blurred);
+            tracer.recordEvent(task.frame_id, "clahe", "end", worker_name);
+            
+            tracer.recordEvent(task.frame_id, "sobel", "start", worker_name);
+            cv::Mat sobel = filters::apply_sobel(clahe);
+            tracer.recordEvent(task.frame_id, "sobel", "end", worker_name);
+            
+            tracer.recordEvent(task.frame_id, "sharpen", "start", worker_name);
+            task.output_frame = filters::apply_sharpen(sobel);
+            tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
+            
+            reorder.push_and_write(task);
+        }
+    };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < num_workers; ++i) {
+        threads.emplace_back(worker_func, i);
+    }
+
+    // 4. Main Thread Dispatcher
+    int current_frame_id = 0;
+    cv::Mat raw_frame;
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    while (cap.read(raw_frame)) {
+        if (raw_frame.empty()) break;
+        FrameTask task;
+        task.frame_id = current_frame_id;
+        task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
+        task.input_frame = raw_frame;
+
+        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
+        
+        int target_worker = current_frame_id % num_workers;
+        queues[target_worker]->push(task);
+        
+        current_frame_id++;
+        if (current_frame_id % 50 == 0) {
+            std::cout << "Decoded & Dispatched " << current_frame_id << " / " << total_frames << " frames...\n";
+        }
+    }
+
+    for (auto& q : queues) q->finish();
+    for (auto& t : threads) t.join();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    
+    cap.release(); 
+    writer.release(); 
+    tracer.flush();
+    std::cout << "Pipeline A2 finished successfully.\n";
+    std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
 void run_a3_static_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers) {

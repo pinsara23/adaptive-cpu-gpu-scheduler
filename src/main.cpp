@@ -22,6 +22,9 @@ int main(int argc, char** argv) {
         cout << "Executing Algorithm A1: Single Core Pipeline Baseline...\n";
         run_a1_single_core_pipeline(input_path, output_path);
     }
+    else if (algo == "A2") {
+        run_a2_smt_pipeline(input_path, output_path);
+    }
     else if (algo == "A3") {
         int num_workers = 4; // Default number of workers
         if (argc > 2) {

@@ -15,3 +15,6 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
 
 // A4: Dynamic Multicore Scheduling (Shared Queue)
 void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);
+
+// A5: Thread-Pinned Multicore Scheduling
+void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);

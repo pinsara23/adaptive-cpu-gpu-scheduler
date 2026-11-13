@@ -2,6 +2,7 @@
 #include <string>
 #include "pipeline.hpp"
 #include <opencv2/core.hpp>
+#include "gpu_pipeline.hpp"
 
 using namespace std;
 
@@ -50,6 +51,10 @@ int main(int argc, char** argv) {
             num_workers = stoi(argv[2]);
         }
         run_a5_pinned_multicore_pipeline(input_path, output_path, num_workers);
+    }
+    else if (algo == "CUDA_CHECK"){
+        detectAndPrintCudaDevice();
+        return 0; // Exit after checking CUDA device
     } 
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";

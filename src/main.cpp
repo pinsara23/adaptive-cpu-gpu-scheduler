@@ -1,10 +1,15 @@
 #include <iostream>
 #include <string>
 #include "pipeline.hpp"
+#include <opencv2/core.hpp>
 
 using namespace std;
 
 int main(int argc, char** argv) {
+
+    //Enforce strict manual multithreading for accurate benchmarking
+    cv::setNumThreads(1);
+    
     // Default to A0 if the user doesn't type an algorithm name
     string algo = "A0"; 
     if (argc > 1) {

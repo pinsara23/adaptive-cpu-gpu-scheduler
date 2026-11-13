@@ -38,7 +38,7 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
     int current_frame_id = 0;
     cv::Mat raw_frame;
 
-    auto start_time = chrono::high_resolution_clock::now();
+    auto start_time = chrono::steady_clock::now();
 
     while (cap.read(raw_frame)) {
         if (raw_frame.empty()) break;
@@ -80,7 +80,7 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
         }
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = std::chrono::steady_clock::now();
     chrono::duration<double> elapsed = end_time - start_time;
 
     cap.release();
@@ -211,7 +211,7 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
 
-    FrameReorder reorder(writer, tracer);
+    FrameReorder reorder(writer, tracer, total_frames);
     
     // 2. Create exactly 2 queues for the 2 SMT threads
     int num_workers = 2;
@@ -225,10 +225,15 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
         // Lock this thread specifically to the physical core's logical threads
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        CPU_SET(sibling1, &cpuset);
-        CPU_SET(sibling2, &cpuset);
-        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-
+        if (worker_id == 0) {
+            CPU_SET(sibling1, &cpuset);
+        } else {
+            CPU_SET(sibling2, &cpuset);
+        }
+        if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+            std::cerr << "Warning: Failed to pin worker " << worker_id << "\n";
+        }
+        
         std::string worker_name = "CPU_SMT_" + std::to_string(worker_id);
         FrameTask task;
         
@@ -253,7 +258,7 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
             task.output_frame = filters::apply_sharpen(sobel);
             tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
             
-            reorder.push_and_write(task);
+            reorder.push_and_write(std::move(task));
         }
     };
 
@@ -265,7 +270,7 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     // 4. Main Thread Dispatcher
     int current_frame_id = 0;
     cv::Mat raw_frame;
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::steady_clock::now();
 
     while (cap.read(raw_frame)) {
         if (raw_frame.empty()) break;
@@ -288,7 +293,10 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     for (auto& q : queues) q->finish();
     for (auto& t : threads) t.join();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
+    reorder.finalize();
+
+    auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
     
     cap.release(); 
@@ -310,7 +318,7 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
 
-    FrameReorder reorder(writer, tracer);
+    FrameReorder reorder(writer, tracer, total_frames);
     
     // 1. Create a queue for each worker (bounded to hold max 10 frames at a time)
     std::vector<std::shared_ptr<BoundedQueue<FrameTask>>> queues;
@@ -346,7 +354,7 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
             tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
             
             // Send to reorder buffer
-            reorder.push_and_write(task);
+            reorder.push_and_write(std::move(task));
         }
     };
 
@@ -359,14 +367,14 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     // 4. Main Thread reads frames and distributes statically
     int current_frame_id = 0;
     cv::Mat raw_frame;
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::steady_clock::now();
 
     while (cap.read(raw_frame)) {
         if (raw_frame.empty()) break;
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame;
+        task.input_frame = raw_frame.clone(); // Ensure each task has its own copy of the frame
 
         tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
         
@@ -384,7 +392,10 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     for (auto& q : queues) q->finish();
     for (auto& t : threads) t.join();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
+    reorder.finalize();
+
+    auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
     
     cap.release(); 
@@ -413,7 +424,7 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
 
-    FrameReorder reorder(writer, tracer);
+    FrameReorder reorder(writer, tracer, total_frames);
 
     // 1. create 1 shared queue for all workers (bound to hold max 20 frames)
     auto shared_queue = std::make_shared<BoundedQueue<FrameTask>>(20);
@@ -445,7 +456,7 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
             tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
 
             // Send to reorder buffer
-            reorder.push_and_write(task);
+            reorder.push_and_write(std::move(task));
         }
     };
 
@@ -458,14 +469,14 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     // 4. Main thread reads frame and pushes to the single queue
     int current_frame_id = 0;
     cv::Mat raw_frame;
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::steady_clock::now();
 
     while (cap.read(raw_frame)) {
         if (raw_frame.empty()) break;
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame;
+        task.input_frame = raw_frame.clone(); // Ensure each task has its own copy of the frame
 
         tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
 
@@ -481,7 +492,10 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     shared_queue->finish();
     for (auto& t : threads) t.join();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
+    reorder.finalize();
+
+    auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
     
     cap.release(); 
@@ -492,8 +506,25 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
-void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers){
+void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers) {
     std::cout << "Executing A5: Thread-Pinned Multicore Pipeline with " << num_workers << " workers...\n";
+    
+    // 1. Discover dynamically available CPUs instead of hardcoding 20
+    cpu_set_t available_cpus;
+    sched_getaffinity(0, sizeof(cpu_set_t), &available_cpus);
+    std::vector<int> online_cpus;
+    for (int i = 0; i < CPU_SETSIZE; ++i) {
+        if (CPU_ISSET(i, &available_cpus)) {
+            online_cpus.push_back(i);
+        }
+    }
+
+    if (online_cpus.empty()) {
+        online_cpus.push_back(0); // Safe fallback
+    }
+
+    std::cout << "Discovered " << online_cpus.size() << " online CPUs for pinning.\n";
+
     TraceManager tracer("../traces/a5_trace.csv");
 
     cv::VideoCapture cap(input_path);
@@ -503,19 +534,25 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
 
-    FrameReorder reorder(writer, tracer);
+    FrameReorder reorder(writer, tracer, total_frames);
 
     std::vector<std::shared_ptr<BoundedQueue<FrameTask>>> queues;
-    for (int i = 0; i< num_workers; i++){
+    for (int i = 0; i < num_workers; i++){
         queues.push_back(std::make_shared<BoundedQueue<FrameTask>>(10));
     }
 
     auto worker_func = [&](int worker_id){
-        // PINNING LOGIC: Lock this worker to a specific hardware thread (0 to 19 on your CPU)
+        // PINNING LOGIC: Map to dynamically discovered online CPUs.
+        // We offset by +1 so Worker 0 does not perfectly overlap with the Main Thread on CPU 0.
+        int target_cpu = online_cpus[(worker_id + 1) % online_cpus.size()];
+        
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        CPU_SET(worker_id % 20, &cpuset); // Modulo 20 ensures we stay within your 20 logical threads
-        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+        CPU_SET(target_cpu, &cpuset); 
+        
+        if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+            std::cerr << "Warning: Failed to pin worker " << worker_id << " to CPU " << target_cpu << "\n";
+        }
 
         std::string worker_name = "CPU_W" + std::to_string(worker_id) + "_PINNED";
         FrameTask task;
@@ -541,7 +578,7 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
             task.output_frame = filters::apply_sharpen(sobel);
             tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
 
-            reorder.push_and_write(task);
+            reorder.push_and_write(std::move(task));
         }
     };
 
@@ -552,20 +589,22 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
 
     int current_frame_id = 0;
     cv::Mat raw_frame;
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::steady_clock::now();
 
-    // Optionally pin the Main Thread to Core 0 as well to isolate it
+    // Pin the Main Thread to the first discovered core to isolate it from the workers
     cpu_set_t main_cpuset;
     CPU_ZERO(&main_cpuset);
-    CPU_SET(0, &main_cpuset);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &main_cpuset);
+    CPU_SET(online_cpus[0], &main_cpuset);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &main_cpuset) != 0) {
+         std::cerr << "Warning: Failed to pin main thread to CPU " << online_cpus[0] << "\n";
+    }
 
     while (cap.read(raw_frame)) {
         if (raw_frame.empty()) break;
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame;
+        task.input_frame = raw_frame.clone(); // Deep copy preserved
 
         tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN_PINNED");
         
@@ -581,7 +620,10 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     for (auto& q : queues) q->finish();
     for (auto& t : threads) t.join();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
+    reorder.finalize();
+    
+    auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
     
     cap.release(); 

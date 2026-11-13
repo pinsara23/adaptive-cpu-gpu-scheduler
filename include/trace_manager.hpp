@@ -1,33 +1,33 @@
 #pragma once
 #include <string>
-# include <vector>
+#include <vector>
 #include <fstream>
 #include <mutex>
 #include <chrono>
+#include <algorithm> // Required for std::stable_sort
 
-using namespace std;
-
-struct TraceEvent{
+struct TraceEvent {
     double time_ms;
     int frame_id;
-    string stage;
-    string event_type;
-    string resource;
+    std::string stage;
+    std::string event_type; // "start" or "end"
+    std::string resource;
 };
 
-class TraceManager{
+class TraceManager {
+public:
+    TraceManager(const std::string& output_file);
+    ~TraceManager();
 
-    public:
-        TraceManager(const string& output_file);
-        ~TraceManager();
+    void recordEvent(int frame_id, const std::string& stage, const std::string& event_type, const std::string& resource);
+    void flush();
 
-        void recordEvent(int frame_id, const string& stage, const string& event_type, const string& resource);
-        void flush();
-
-    private:
-        string filename;
-        ofstream outfile;
-        vector<TraceEvent> events;
-        mutex mtx;
-        chrono::high_resolution_clock::time_point pipeline_start_time;
-    };
+private:
+    std::string filename;
+    std::ofstream outfile;
+    std::vector<TraceEvent> events;
+    std::mutex mtx; 
+    
+    // FIX (Issue 5): Use steady_clock to guarantee monotonic timing
+    std::chrono::steady_clock::time_point pipeline_start_time; 
+};

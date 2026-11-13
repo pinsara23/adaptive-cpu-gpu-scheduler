@@ -13,6 +13,7 @@
 #include "trace_manager.hpp"
 #include "frame_reorder.hpp"
 #include "bounded_queue.hpp"
+#include "gpu_pipeline.hpp"
 
 using namespace std; 
 
@@ -630,6 +631,88 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     writer.release(); 
     tracer.flush();
     std::cout << "Pipeline A5 finished successfully.\n";
+    std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+}
+
+void run_a6_gpu_pipeline(const std::string& input_path, const std::string& output_path) {
+    std::cout << "Executing A6: Sequential CPU-GPU Heterogeneous Pipeline...\n";
+    TraceManager tracer("../traces/a6_trace.csv");
+
+    cv::VideoCapture cap(input_path);
+    if (!cap.isOpened()) return;
+
+    // FIX: Dynamically query available resources (Video Dimensions and FPS)
+    int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+    int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double fps = cap.get(cv::CAP_PROP_FPS);
+
+    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
+                           fps, cv::Size(frame_width, frame_height), false);
+
+    // FIX: Allocate VRAM dynamically based on the specific input video
+    unsigned char* d_in = nullptr;
+    unsigned char* d_out = nullptr;
+    allocate_device_memory(&d_in, &d_out, frame_width, frame_height, 3);
+
+    int current_frame_id = 0;
+    cv::Mat raw_frame;
+    auto start_time = std::chrono::steady_clock::now();
+
+    while (cap.read(raw_frame)) {
+        if (raw_frame.empty()) break;
+        
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");
+        
+        // Deep copy for memory safety
+        cv::Mat input_frame = raw_frame.clone();
+
+        // --- CPU STAGE 1: Resize ---
+        tracer.recordEvent(current_frame_id, "resize", "start", "CPU_MAIN");
+        cv::Mat resized = filters::resize_frame(input_frame, frame_width, frame_height);
+        tracer.recordEvent(current_frame_id, "resize", "end", "CPU_MAIN");
+
+        // --- GPU STAGE 2: Custom CUDA Blur ---
+        // Dynamically size the OpenCV output matrix to match
+        cv::Mat blurred(frame_height, frame_width, CV_8UC3); 
+        launch_cuda_blur(resized.data, blurred.data, d_in, d_out, frame_width, frame_height, 3, tracer, current_frame_id);
+
+        // --- CPU STAGES 3, 4, 5: CLAHE, Sobel, Sharpen ---
+        tracer.recordEvent(current_frame_id, "clahe", "start", "CPU_MAIN");
+        cv::Mat clahe = filters::apply_clahe(blurred);
+        tracer.recordEvent(current_frame_id, "clahe", "end", "CPU_MAIN");
+
+        tracer.recordEvent(current_frame_id, "sobel", "start", "CPU_MAIN");
+        cv::Mat sobel = filters::apply_sobel(clahe);
+        tracer.recordEvent(current_frame_id, "sobel", "end", "CPU_MAIN");
+
+        tracer.recordEvent(current_frame_id, "sharpen", "start", "CPU_MAIN");
+        cv::Mat sharp = filters::apply_sharpen(sobel);
+        tracer.recordEvent(current_frame_id, "sharpen", "end", "CPU_MAIN");
+
+        // --- CPU STAGE 6: Encode ---
+        tracer.recordEvent(current_frame_id, "encode", "start", "CPU_MAIN");
+        writer.write(sharp);
+        tracer.recordEvent(current_frame_id, "encode", "end", "CPU_MAIN");
+
+        current_frame_id++;
+        if (current_frame_id % 50 == 0) {
+            std::cout << "Processed " << current_frame_id << " / " << total_frames << " frames...\n";
+        }
+    }
+
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
+    // Clean up VRAM!
+    free_device_memory(d_in, d_out);
+    
+    cap.release(); 
+    writer.release(); 
+    tracer.flush();
+    
+    std::cout << "Pipeline A6 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }

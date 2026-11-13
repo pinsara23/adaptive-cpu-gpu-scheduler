@@ -20,7 +20,12 @@ int main(int argc, char** argv) {
     string input_path = "../videos/input.mp4";
     string output_path = "../output/output_" + algo + ".mp4"; // Saves as output_A0.mp4, output_A1.mp4, etc.
 
-    if (algo == "A0") {
+    if (algo == "CUDA_INFO") {
+        std::cout << "Querying GPU Hardware...\n";
+        print_cuda_device_info();
+        return 0; // Exit after printing info
+    }
+    else if (algo == "A0") {
         cout << "Executing Algorithm A0: Sequential Baseline...\n";
         run_sequential_pipeline(input_path, output_path);
     } 
@@ -52,10 +57,10 @@ int main(int argc, char** argv) {
         }
         run_a5_pinned_multicore_pipeline(input_path, output_path, num_workers);
     }
-    else if (algo == "CUDA_CHECK"){
-        detectAndPrintCudaDevice();
-        return 0; // Exit after checking CUDA device
-    } 
+    else if (algo == "A6") {
+        // Make sure to declare void run_a6_gpu_pipeline(const std::string&, const std::string&); above main
+        run_a6_gpu_pipeline(input_path, output_path);
+    }
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";
         cerr << "Usage: ./video_pipeline [A0|A1|A2...]\n";

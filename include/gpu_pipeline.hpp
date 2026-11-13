@@ -1,8 +1,14 @@
-#ifndef GPU_PIPELINE_HPP
-#define GPU_PIPELINE_HPP
+#pragma once
+#include "trace_manager.hpp"
 
-// simple function to detect and print CUDA device information
-//verify CUD runtime and health.
-void detectAndPrintCudaDevice();
+void print_cuda_device_info();
 
-#endif // GPU_PIPELINE_HPP
+// VRAM Memory Management
+void allocate_device_memory(unsigned char** d_in, unsigned char** d_out, int width, int height, int channels);
+void free_device_memory(unsigned char* d_in, unsigned char* d_out);
+
+// Heterogeneous execution: PCIe transfer, kernel execution, and PCIe return
+void launch_cuda_blur(const unsigned char* h_in, unsigned char* h_out, 
+                      unsigned char* d_in, unsigned char* d_out, 
+                      int width, int height, int channels, 
+                      TraceManager& tracer, int frame_id);

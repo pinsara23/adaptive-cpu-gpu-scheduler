@@ -18,3 +18,5 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
 
 // A5: Thread-Pinned Multicore Scheduling
 void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);
+
+void run_a6_gpu_pipeline(const std::string& input_path, const std::string& output_path);

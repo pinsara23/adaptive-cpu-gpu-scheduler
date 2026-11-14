@@ -7,6 +7,8 @@
 #include <vector>
 #include <memory>
 #include <fstream>
+#include <thread>
+#include <vector>
 
 #include "filters.hpp"
 #include "frame_task.hpp"
@@ -713,6 +715,316 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
     tracer.flush();
     
     std::cout << "Pipeline A6 finished successfully.\n";
+    std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+}
+
+void run_a7_concurrent_pipeline(const std::string& input_path, const std::string& output_path) {
+    std::cout << "Executing A7: Concurrent CPU-GPU Pipeline...\n";
+    TraceManager tracer("../traces/a7_trace.csv");
+
+    cv::VideoCapture cap(input_path);
+    if (!cap.isOpened()) return;
+
+    int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+    int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double fps = cap.get(cv::CAP_PROP_FPS);
+
+    // Queues: Capacity of 30 frames each to enforce backpressure
+    BoundedQueue<FrameTask> cpu_to_gpu_queue(30);
+    BoundedQueue<FrameTask> gpu_to_cpu_queue(30);
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // --- THREAD 3: Writer Thread (CPU Post-Processing & I/O) ---
+    std::thread writer_thread([&]() {
+        cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
+                               fps, cv::Size(frame_width, frame_height), false);
+        
+        while (true) {
+            FrameTask task;
+            gpu_to_cpu_queue.pop(task);
+            
+            if (task.frame_id == -1) break; // Poison pill terminates thread
+
+            tracer.recordEvent(task.frame_id, "clahe", "start", "CPU_WRITER");
+            cv::Mat clahe = filters::apply_clahe(task.output_frame);
+            tracer.recordEvent(task.frame_id, "clahe", "end", "CPU_WRITER");
+
+            tracer.recordEvent(task.frame_id, "sobel", "start", "CPU_WRITER");
+            cv::Mat sobel = filters::apply_sobel(clahe);
+            tracer.recordEvent(task.frame_id, "sobel", "end", "CPU_WRITER");
+
+            tracer.recordEvent(task.frame_id, "sharpen", "start", "CPU_WRITER");
+            cv::Mat sharp = filters::apply_sharpen(sobel);
+            tracer.recordEvent(task.frame_id, "sharpen", "end", "CPU_WRITER");
+
+            tracer.recordEvent(task.frame_id, "encode", "start", "CPU_WRITER");
+            writer.write(sharp);
+            tracer.recordEvent(task.frame_id, "encode", "end", "CPU_WRITER");
+        }
+        writer.release();
+    });
+
+    // --- THREAD 2: GPU Worker Thread (PCIe & CUDA Compute) ---
+    std::thread gpu_thread([&]() {
+        unsigned char* d_in = nullptr;
+        unsigned char* d_out = nullptr;
+        allocate_device_memory(&d_in, &d_out, frame_width, frame_height, 3); // Pre-allocate VRAM
+
+        while (true) {
+            FrameTask task;
+            cpu_to_gpu_queue.pop(task);
+            
+            if (task.frame_id == -1) {
+                // Forward poison pill to Writer Thread and terminate
+                gpu_to_cpu_queue.push(std::move(task));
+                break;
+            }
+
+            cv::Mat blurred(frame_height, frame_width, CV_8UC3); 
+            launch_cuda_blur(task.input_frame.data, blurred.data, d_in, d_out, frame_width, frame_height, 3, tracer, task.frame_id);
+
+            // Assign the blurred frame to output_frame, and explicitly free input_frame to save RAM!
+            task.output_frame = std::move(blurred);
+            task.input_frame.release(); 
+
+            gpu_to_cpu_queue.push(std::move(task)); // Zero-copy move to next queue
+        }
+        free_device_memory(d_in, d_out);
+    });
+
+    // --- THREAD 1: Main Reader Thread (CPU Pre-Processing) ---
+    int current_frame_id = 0;
+    cv::Mat raw_frame;
+    
+    while (cap.read(raw_frame)) {
+        if (raw_frame.empty()) break;
+        
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_READER");
+        cv::Mat input_mat = raw_frame.clone(); // Deep copy once to prevent OpenCV data race
+
+        tracer.recordEvent(current_frame_id, "resize", "start", "CPU_READER");
+        cv::Mat resized = filters::resize_frame(input_mat, frame_width, frame_height);
+        tracer.recordEvent(current_frame_id, "resize", "end", "CPU_READER");
+
+        // Construct the FrameTask exactly according to your struct
+        FrameTask task;
+        task.frame_id = current_frame_id;
+        task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
+        task.input_frame = std::move(resized);
+
+        cpu_to_gpu_queue.push(std::move(task)); // Push to GPU queue
+
+        current_frame_id++;
+        if (current_frame_id % 50 == 0) {
+            std::cout << "Read " << current_frame_id << " / " << total_frames << " frames...\n";
+        }
+    }
+
+    // Send Poison Pill to flush the queues and cleanly shutdown
+    FrameTask poison_pill;
+    poison_pill.frame_id = -1;
+    cpu_to_gpu_queue.push(std::move(poison_pill));
+
+    // Wait for workers to finish
+    gpu_thread.join();
+    writer_thread.join();
+
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
+    cap.release();
+    tracer.flush();
+    
+    std::cout << "Pipeline A7 finished successfully.\n";
+    std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+}
+
+void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& output_path, int num_workers) {
+    std::cout << "Executing A8: Hybrid CPU-GPU Asynchronous Pipeline (" << num_workers << " workers)...\n";
+    TraceManager tracer("../traces/a8_trace.csv");
+
+    cv::VideoCapture cap(input_path);
+    if (!cap.isOpened()) return;
+
+    int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+    int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double fps = cap.get(cv::CAP_PROP_FPS);
+
+    // FIX: Inline CPU topology discovery from A5
+    cpu_set_t available_cpus;
+    sched_getaffinity(0, sizeof(cpu_set_t), &available_cpus);
+    std::vector<int> online_cpus;
+    for (int i = 0; i < CPU_SETSIZE; ++i) {
+        if (CPU_ISSET(i, &available_cpus)) {
+            online_cpus.push_back(i);
+        }
+    }
+    if (online_cpus.empty()) {
+        online_cpus.push_back(0); // Safe fallback
+    }
+    std::cout << "Discovered " << online_cpus.size() << " online CPUs for pinning.\n";
+
+    // 3 Dedicated Queues
+    BoundedQueue<FrameTask> cpu_to_gpu_queue(30);
+    BoundedQueue<FrameTask> gpu_to_worker_queue(60);
+    BoundedQueue<FrameTask> worker_to_writer_queue(60);
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // --- STAGE 4: Dedicated Writer Thread (CPU 1) ---
+    std::thread writer_thread([&]() {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(online_cpus[1 % online_cpus.size()], &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+        cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
+                               fps, cv::Size(frame_width, frame_height), false);
+        
+        FrameReorder reorder(writer, tracer, total_frames, 60); 
+
+        while (true) {
+            FrameTask task;
+            worker_to_writer_queue.pop(task);
+            
+            if (task.frame_id == -1) break; // Poison pill
+
+            reorder.push_and_write(std::move(task)); 
+        }
+        
+        reorder.finalize(); 
+        writer.release();
+    });
+
+    // --- STAGE 2: GPU Dispatch Thread (CPU 2) ---
+    std::thread gpu_thread([&]() {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(online_cpus[2 % online_cpus.size()], &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+        unsigned char* d_in = nullptr;
+        unsigned char* d_out = nullptr;
+        allocate_device_memory(&d_in, &d_out, frame_width, frame_height, 3);
+
+        while (true) {
+            FrameTask task;
+            cpu_to_gpu_queue.pop(task);
+            
+            if (task.frame_id == -1) break; // Stop processing, do not poison workers yet
+
+            cv::Mat blurred(frame_height, frame_width, CV_8UC3); 
+            launch_cuda_blur(task.input_frame.data, blurred.data, d_in, d_out, frame_width, frame_height, 3, tracer, task.frame_id);
+
+            task.output_frame = std::move(blurred);
+            task.input_frame.release(); // Explicitly free RAM
+
+            gpu_to_worker_queue.push(std::move(task));
+        }
+        free_device_memory(d_in, d_out);
+    });
+
+    // --- STAGE 3: CPU Worker Pool (CPUs 3+) ---
+    std::vector<std::thread> workers;
+    for (int i = 0; i < num_workers; ++i) {
+        workers.emplace_back([&, i]() {
+            // Thread Pinning: Offset by 3 to reserve CPUs for Reader, Writer, and GPU dispatch
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            int target_cpu = online_cpus[(i + 3) % online_cpus.size()]; 
+            CPU_SET(target_cpu, &cpuset);
+            pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+            
+            std::string worker_id_str = "CPU_WORKER_" + std::to_string(i);
+
+            while (true) {
+                FrameTask task;
+                gpu_to_worker_queue.pop(task);
+                
+                if (task.frame_id == -1) break;
+
+                tracer.recordEvent(task.frame_id, "clahe", "start", worker_id_str);
+                cv::Mat clahe = filters::apply_clahe(task.output_frame);
+                tracer.recordEvent(task.frame_id, "clahe", "end", worker_id_str);
+
+                tracer.recordEvent(task.frame_id, "sobel", "start", worker_id_str);
+                cv::Mat sobel = filters::apply_sobel(clahe);
+                tracer.recordEvent(task.frame_id, "sobel", "end", worker_id_str);
+
+                tracer.recordEvent(task.frame_id, "sharpen", "start", worker_id_str);
+                cv::Mat sharp = filters::apply_sharpen(sobel);
+                tracer.recordEvent(task.frame_id, "sharpen", "end", worker_id_str);
+
+                task.output_frame = std::move(sharp);
+                worker_to_writer_queue.push(std::move(task));
+            }
+        });
+    }
+
+    // --- STAGE 1: Main Reader Thread (CPU 0) ---
+    cpu_set_t main_cpuset;
+    CPU_ZERO(&main_cpuset);
+    CPU_SET(online_cpus[0], &main_cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &main_cpuset);
+
+    int current_frame_id = 0;
+    cv::Mat raw_frame;
+    
+    while (cap.read(raw_frame)) {
+        if (raw_frame.empty()) break;
+        
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_READER");
+        cv::Mat input_mat = raw_frame.clone();
+
+        tracer.recordEvent(current_frame_id, "resize", "start", "CPU_READER");
+        cv::Mat resized = filters::resize_frame(input_mat, frame_width, frame_height);
+        tracer.recordEvent(current_frame_id, "resize", "end", "CPU_READER");
+
+        FrameTask task;
+        task.frame_id = current_frame_id;
+        task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
+        task.input_frame = std::move(resized);
+
+        cpu_to_gpu_queue.push(std::move(task));
+
+        current_frame_id++;
+        if (current_frame_id % 50 == 0) {
+            std::cout << "Read " << current_frame_id << " / " << total_frames << " frames...\n";
+        }
+    }
+
+    // --- CASCADING SHUTDOWN SEQUENCE ---
+    FrameTask gpu_poison;
+    gpu_poison.frame_id = -1;
+    cpu_to_gpu_queue.push(std::move(gpu_poison));
+    gpu_thread.join();
+
+    for (int i = 0; i < num_workers; ++i) {
+        FrameTask worker_poison;
+        worker_poison.frame_id = -1;
+        gpu_to_worker_queue.push(std::move(worker_poison));
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+
+    FrameTask writer_poison;
+    writer_poison.frame_id = -1;
+    worker_to_writer_queue.push(std::move(writer_poison));
+    writer_thread.join();
+
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
+    cap.release();
+    tracer.flush();
+    
+    std::cout << "Pipeline A8 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }

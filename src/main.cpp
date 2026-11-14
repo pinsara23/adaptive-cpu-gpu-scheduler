@@ -61,6 +61,13 @@ int main(int argc, char** argv) {
         // Make sure to declare void run_a6_gpu_pipeline(const std::string&, const std::string&); above main
         run_a6_gpu_pipeline(input_path, output_path);
     }
+    else if (algo == "A7") {
+        run_a7_concurrent_pipeline(input_path, output_path);
+    }
+    else if (algo == "A8") {
+        int num_workers = (argc > 3) ? std::stoi(argv[3]) : 8; // Default to 8 if not specified
+        run_a8_hybrid_pipeline(input_path, output_path, num_workers);
+    }
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";
         cerr << "Usage: ./video_pipeline [A0|A1|A2...]\n";

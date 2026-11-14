@@ -20,3 +20,7 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
 void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);
 
 void run_a6_gpu_pipeline(const std::string& input_path, const std::string& output_path);
+
+void run_a7_concurrent_pipeline(const std::string& input_path, const std::string& output_path);
+
+void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);

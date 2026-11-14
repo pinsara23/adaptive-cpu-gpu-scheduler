@@ -83,12 +83,14 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
         }
     }
 
+    cap.release();
+    writer.release();
+
     auto end_time = std::chrono::steady_clock::now();
     chrono::duration<double> elapsed = end_time - start_time;
 
-    cap.release();
-    writer.release();
     tracer.flush();
+
 
     cout << "Pipeline A0 finished successfully.\n";
     cout << "Total Frames: " << current_frame_id << "\n";
@@ -131,7 +133,7 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
     int current_frame_id = 0;
     cv::Mat raw_frame;
 
-    auto start_time = chrono::high_resolution_clock::now();
+    auto start_time = chrono::steady_clock::now();
 
     // 3. Process video (locked to 1 core)
 
@@ -176,12 +178,15 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
 
     }
 
-    auto end_time = chrono::high_resolution_clock::now();
-    chrono::duration<double> elapsed = end_time - start_time;
 
     cap.release();
     writer.release();
+
+    auto end_time = chrono::steady_clock::now();
+    chrono::duration<double> elapsed = end_time - start_time;
+
     tracer.flush();
+
 
     cout << "Pipeline A1 finished successfully.\n";
     cout << "Total Frames: " << current_frame_id << "\n";
@@ -299,12 +304,15 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
     reorder.finalize();
 
-    auto end_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    
     cap.release(); 
     writer.release(); 
+
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
     tracer.flush();
+
+
     std::cout << "Pipeline A2 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
@@ -398,12 +406,14 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
     reorder.finalize();
 
-    auto end_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    
     cap.release(); 
     writer.release(); 
+    
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
     tracer.flush();
+
     std::cout << "Pipeline A3 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
@@ -498,12 +508,14 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
     reorder.finalize();
 
-    auto end_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    
     cap.release(); 
     writer.release(); 
+    
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
     tracer.flush();
+
     std::cout << "Pipeline A4 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
@@ -626,12 +638,14 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
     reorder.finalize();
     
-    auto end_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    
     cap.release(); 
     writer.release(); 
+    
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+
     tracer.flush();
+
     std::cout << "Pipeline A5 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";

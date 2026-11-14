@@ -30,6 +30,7 @@ add_executable(video_pipeline
     src/trace_manager.cpp
     src/pipeline.cpp
     src/frame_reorder.cpp
+    src/cpu_pipeline.cpp
     src/gpu_pipeline.cu
 )
 

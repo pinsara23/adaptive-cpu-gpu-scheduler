@@ -16,6 +16,8 @@
 #include "frame_reorder.hpp"
 #include "bounded_queue.hpp"
 #include "gpu_pipeline.hpp"
+#include "cpu_pipeline.hpp"
+#include "config.hpp"
 
 using namespace std; 
 
@@ -38,6 +40,11 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
                            cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            fps, cv::Size(target_width, target_height), false);
 
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
+
     int current_frame_id = 0;
     cv::Mat raw_frame;
 
@@ -53,26 +60,9 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
 
         tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
 
-        tracer.recordEvent(task.frame_id, "resize", "start", "CPU_MAIN");
-        cv::Mat resized = filters::resize_frame(task.input_frame, target_width, target_height);
-        tracer.recordEvent(task.frame_id, "resize", "end", "CPU_MAIN");
-
-        tracer.recordEvent(task.frame_id, "blur", "start", "CPU_MAIN");
-        cv::Mat blurred = filters::apply_blur(resized);
-        tracer.recordEvent(task.frame_id, "blur", "end", "CPU_MAIN");
-
-        tracer.recordEvent(task.frame_id, "clahe", "start", "CPU_MAIN");
-        cv::Mat clahe_out = filters::apply_clahe(blurred);
-        tracer.recordEvent(task.frame_id, "clahe", "end", "CPU_MAIN");
-
-        tracer.recordEvent(task.frame_id, "sobel", "start", "CPU_MAIN");
-        cv::Mat sobel_out = filters::apply_sobel(clahe_out);
-        tracer.recordEvent(task.frame_id, "sobel", "end", "CPU_MAIN");
-
-        tracer.recordEvent(task.frame_id, "sharpen", "start", "CPU_MAIN");
-        task.output_frame = filters::apply_sharpen(sobel_out);
-        tracer.recordEvent(task.frame_id, "sharpen", "end", "CPU_MAIN");
-
+        task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
+                                              "CPU_MAIN", target_width, target_height);
+        
         tracer.recordEvent(task.frame_id, "encode", "start", "CPU_MAIN");
         writer.write(task.output_frame);
         tracer.recordEvent(task.frame_id, "encode", "end", "CPU_MAIN");
@@ -83,10 +73,11 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
         }
     }
 
+    auto loop_end = std::chrono::steady_clock::now();   // all frames processed and handed to the writer
     cap.release();
-    writer.release();
-
+    writer.release();                                   // finalizes the mp4
     auto end_time = std::chrono::steady_clock::now();
+    chrono::duration<double> loop_elapsed = loop_end - start_time;
     chrono::duration<double> elapsed = end_time - start_time;
 
     tracer.flush();
@@ -94,6 +85,7 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
 
     cout << "Pipeline A0 finished successfully.\n";
     cout << "Total Frames: " << current_frame_id << "\n";
+    cout << "Loop Time:    " << loop_elapsed.count() << " seconds\n";
     cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 

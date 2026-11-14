@@ -2,12 +2,28 @@
 #include <string>
 #include "pipeline.hpp"
 #include <opencv2/core.hpp>
+#include <malloc.h>
+#include <cstdlib>
+
 #include "gpu_pipeline.hpp"
 
 using namespace std;
 
+// Process-wide allocator configuration, applied identically to every algorithm.
+// Stops glibc from returning large frame buffers to the OS on every free, which
+// otherwise causes repeated page faults (kernel time) in the per-frame loop.
+// Set HPC_NO_MALLOC_TUNE=1 to measure the default allocator instead.
+static void configure_allocator() {
+    if (std::getenv("HPC_NO_MALLOC_TUNE")) return;
+    mallopt(M_MMAP_THRESHOLD, 32 * 1024 * 1024);
+    mallopt(M_TRIM_THRESHOLD, 1024 * 1024 * 1024);
+    mallopt(M_TOP_PAD,        64 * 1024 * 1024);
+}
+
 int main(int argc, char** argv) {
 
+    configure_allocator();
+    
     //Enforce strict manual multithreading for accurate benchmarking
     cv::setNumThreads(1);
     

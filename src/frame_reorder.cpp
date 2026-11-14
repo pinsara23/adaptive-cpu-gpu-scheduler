@@ -7,9 +7,8 @@ FrameReorder::FrameReorder(cv::VideoWriter& writer, TraceManager& tracer, int to
 void FrameReorder::push_and_write(FrameTask&& task) {
     std::unique_lock<std::mutex> lock(mtx_);
 
-    cv_capacity_.wait(lock, [this]() {
-        return buffer_.size() < max_capacity_;
-    });
+    cv_capacity_.wait(lock, [this, &task]() {
+        return buffer_.size() < max_capacity_ || task.frame_id == next_expected_frame_id_;    });
 
     if (buffer_.find(task.frame_id) != buffer_.end()) {
         std::cerr << "Error: Duplicate frame ID detected in Reorder Buffer: " << task.frame_id << "\n";

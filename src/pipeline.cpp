@@ -280,7 +280,7 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame;
+        task.input_frame = raw_frame.clone(); // Ensure each task has its own copy of the frame
 
         tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
         

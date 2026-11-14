@@ -145,4 +145,7 @@ env/
 # ==========================================
 
 *.local
-local_config.*traces/*.csv
+local_config.*
+
+# Generated traces
+traces/*.csv

@@ -139,25 +139,8 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
 
         tracer.recordEvent(task.frame_id, "decode", "end", "CPU_0");
 
-        tracer.recordEvent(task.frame_id, "resize", "start", "CPU_0");
-        cv::Mat resized = filters::resize_frame(task.input_frame, target_width, target_height);
-        tracer.recordEvent(task.frame_id, "resize", "end", "CPU_0");
-
-        tracer.recordEvent(task.frame_id, "blur", "start", "CPU_0");
-        cv::Mat blurred = filters::apply_blur(resized);
-        tracer.recordEvent(task.frame_id, "blur", "end", "CPU_0");
-
-        tracer.recordEvent(task.frame_id, "clahe", "start", "CPU_0");
-        cv::Mat clahe_out = filters::apply_clahe(blurred);
-        tracer.recordEvent(task.frame_id, "clahe", "end", "CPU_0");
-
-        tracer.recordEvent(task.frame_id, "sobel", "start", "CPU_0");
-        cv::Mat sobel_out = filters::apply_sobel(clahe_out);
-        tracer.recordEvent(task.frame_id, "sobel", "end", "CPU_0");
-
-        tracer.recordEvent(task.frame_id, "sharpen", "start", "CPU_0");
-        task.output_frame = filters::apply_sharpen(sobel_out);
-        tracer.recordEvent(task.frame_id, "sharpen", "end", "CPU_0");
+        task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
+                                              "CPU_0", target_width, target_height);
 
         tracer.recordEvent(task.frame_id, "encode", "start", "CPU_0");
         writer.write(task.output_frame);
@@ -237,27 +220,10 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
         std::string worker_name = "CPU_SMT_" + std::to_string(worker_id);
         FrameTask task;
         
-        while (queues[worker_id]->pop(task)) {
-            tracer.recordEvent(task.frame_id, "resize", "start", worker_name);
-            cv::Mat resized = filters::resize_frame(task.input_frame, 1280, 720);
-            tracer.recordEvent(task.frame_id, "resize", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "blur", "start", worker_name);
-            cv::Mat blurred = filters::apply_blur(resized);
-            tracer.recordEvent(task.frame_id, "blur", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "clahe", "start", worker_name);
-            cv::Mat clahe = filters::apply_clahe(blurred);
-            tracer.recordEvent(task.frame_id, "clahe", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "sobel", "start", worker_name);
-            cv::Mat sobel = filters::apply_sobel(clahe);
-            tracer.recordEvent(task.frame_id, "sobel", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "sharpen", "start", worker_name);
-            task.output_frame = filters::apply_sharpen(sobel);
-            tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
-            
+        while (queues[worker_id]->pop(task)) {      // A4: shared_queue->pop(task)
+            task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
+                                                  worker_name,
+                                                  config::TARGET_WIDTH, config::TARGET_HEIGHT);
             reorder.push_and_write(std::move(task));
         }
     };
@@ -335,28 +301,10 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
         FrameTask task;
         
         // Keep popping frames until the queue is finished and empty
-        while (queues[worker_id]->pop(task)) {
-            tracer.recordEvent(task.frame_id, "resize", "start", worker_name);
-            cv::Mat resized = filters::resize_frame(task.input_frame, 1280, 720);
-            tracer.recordEvent(task.frame_id, "resize", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "blur", "start", worker_name);
-            cv::Mat blurred = filters::apply_blur(resized);
-            tracer.recordEvent(task.frame_id, "blur", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "clahe", "start", worker_name);
-            cv::Mat clahe = filters::apply_clahe(blurred);
-            tracer.recordEvent(task.frame_id, "clahe", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "sobel", "start", worker_name);
-            cv::Mat sobel = filters::apply_sobel(clahe);
-            tracer.recordEvent(task.frame_id, "sobel", "end", worker_name);
-            
-            tracer.recordEvent(task.frame_id, "sharpen", "start", worker_name);
-            task.output_frame = filters::apply_sharpen(sobel);
-            tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
-            
-            // Send to reorder buffer
+        while (queues[worker_id]->pop(task)) {      // A4: shared_queue->pop(task)
+            task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
+                                                  worker_name,
+                                                  config::TARGET_WIDTH, config::TARGET_HEIGHT);
             reorder.push_and_write(std::move(task));
         }
     };
@@ -439,28 +387,10 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
         std::string worker_name = "CPU_W" + std::to_string(worker_id);
         FrameTask task;
 
-        while(shared_queue->pop(task)){
-            tracer.recordEvent(task.frame_id, "resize", "start", worker_name);
-            cv::Mat resized = filters::resize_frame(task.input_frame, 1280, 720);
-            tracer.recordEvent(task.frame_id, "resize", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "blur", "start", worker_name);
-            cv::Mat blurred = filters::apply_blur(resized);
-            tracer.recordEvent(task.frame_id, "blur", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "clahe", "start", worker_name);
-            cv::Mat clahe = filters::apply_clahe(blurred);
-            tracer.recordEvent(task.frame_id, "clahe", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "sobel", "start", worker_name);
-            cv::Mat sobel = filters::apply_sobel(clahe);
-            tracer.recordEvent(task.frame_id, "sobel", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "sharpen", "start", worker_name);
-            task.output_frame = filters::apply_sharpen(sobel);
-            tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
-
-            // Send to reorder buffer
+        while (shared_queue->pop(task)) {      
+            task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
+                                                  worker_name,
+                                                  config::TARGET_WIDTH, config::TARGET_HEIGHT);
             reorder.push_and_write(std::move(task));
         }
     };
@@ -564,27 +494,10 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
         std::string worker_name = "CPU_W" + std::to_string(worker_id) + "_PINNED";
         FrameTask task;
 
-        while(queues[worker_id]->pop(task)){
-            tracer.recordEvent(task.frame_id, "resize", "start", worker_name);
-            cv::Mat resized = filters::resize_frame(task.input_frame, 1280, 720);
-            tracer.recordEvent(task.frame_id, "resize", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "blur", "start", worker_name);
-            cv::Mat blurred = filters::apply_blur(resized);
-            tracer.recordEvent(task.frame_id, "blur", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "clahe", "start", worker_name);
-            cv::Mat clahe = filters::apply_clahe(blurred);
-            tracer.recordEvent(task.frame_id, "clahe", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "sobel", "start", worker_name);
-            cv::Mat sobel = filters::apply_sobel(clahe);
-            tracer.recordEvent(task.frame_id, "sobel", "end", worker_name);
-
-            tracer.recordEvent(task.frame_id, "sharpen", "start", worker_name);
-            task.output_frame = filters::apply_sharpen(sobel);
-            tracer.recordEvent(task.frame_id, "sharpen", "end", worker_name);
-
+        while (queues[worker_id]->pop(task)) {      // A4: shared_queue->pop(task)
+            task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
+                                                  worker_name,
+                                                  config::TARGET_WIDTH, config::TARGET_HEIGHT);
             reorder.push_and_write(std::move(task));
         }
     };

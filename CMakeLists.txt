@@ -32,6 +32,7 @@ add_executable(video_pipeline
     src/frame_reorder.cpp
     src/cpu_pipeline.cpp
     src/gpu_pipeline.cu
+    src/cpu_topology.cpp
 )
 
 target_compile_options(video_pipeline PRIVATE

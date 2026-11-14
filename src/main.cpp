@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "gpu_pipeline.hpp"
+#include "cpu_topology.hpp"
 
 using namespace std;
 
@@ -83,6 +84,10 @@ int main(int argc, char** argv) {
     else if (algo == "A8") {
         int num_workers = (argc > 3) ? std::stoi(argv[3]) : 8; // Default to 8 if not specified
         run_a8_hybrid_pipeline(input_path, output_path, num_workers);
+    }
+    else if (algo == "TOPO") {
+        print_cpu_topology();
+        return 0;
     }
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";

@@ -9,6 +9,8 @@
 #include <fstream>
 #include <thread>
 #include <vector>
+#include <algorithm>
+ 
 
 #include "filters.hpp"
 #include "frame_task.hpp"
@@ -187,23 +189,36 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
     cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
-void run_a2_smt_pipeline(const std::string& input_path, const std::string& output_path) {
-    std::cout << "Executing A2: Single-Core SMT (Hyper-Threading)...\n";
-    
-    // 1. Hardware-Aware Topology Read: Find the sibling thread for physical Core 0
-    int sibling1 = 0;
-    int sibling2 = 1; // Fallback
-    std::ifstream sibling_file("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list");
-    if (sibling_file.is_open()) {
-        std::string line;
-        std::getline(sibling_file, line);
-        size_t sep = line.find_first_of(",-");
-        if (sep != std::string::npos) {
-            sibling1 = std::stoi(line.substr(0, sep));
-            sibling2 = std::stoi(line.substr(sep + 1));
+void run_a2_smt_pipeline(const std::string& input_path, const std::string& output_path, int num_workers) {
+
+    std::cout << "Executing A2: Single-Core SMT with " << num_workers << " worker(s)...\n";
+
+        // Workers share ONE physical core (core 0). The main/decoder thread runs on a different
+        // physical core, so A2(1) vs A2(2) differs only in SMT usage.
+        std::vector<int> sib = cpu_siblings(0);   // e.g. {0, 1}
+        if (num_workers < 1) num_workers = 1;
+        if (num_workers > static_cast<int>(sib.size())) {
+            std::cerr << "Warning: core 0 has only " << sib.size()
+                      << " logical CPU(s); using that many workers\n";
+            num_workers = static_cast<int>(sib.size());
+        }
+
+    // Pin the main thread BEFORE opening the video: FFmpeg's decoder threads inherit it.
+    int main_cpu = -1;
+    for (int c : cpu_assignment_order()) {
+        if (std::find(sib.begin(), sib.end(), c) == sib.end()) { main_cpu = c; break; }
+    }
+    if (main_cpu >= 0) {
+        cpu_set_t ms;
+        CPU_ZERO(&ms);
+        CPU_SET(main_cpu, &ms);
+        if (pthread_setaffinity_np(pthread_self(), sizeof(ms), &ms) != 0) {
+            std::cerr << "Warning: failed to pin main thread to CPU " << main_cpu << "\n";
         }
     }
-    std::cout << "Hardware Topology: Physical Core 0 maps to logical threads CPU " << sibling1 << " and CPU " << sibling2 << "\n";
+    std::cout << "A2 pinning: main/decoder -> CPU " << main_cpu << ", workers ->";
+    for (int i = 0; i < num_workers; ++i) std::cout << " " << sib[i];
+    std::cout << "\n";
 
     TraceManager tracer("../traces/a2_trace.csv");
     cv::VideoCapture cap(input_path);
@@ -220,8 +235,6 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
 
     FrameReorder reorder(writer, tracer, total_frames);
     
-    // 2. Create exactly 2 queues for the 2 SMT threads
-    int num_workers = 2;
     std::vector<std::shared_ptr<BoundedQueue<FrameTask>>> queues;
     for (int i = 0; i < num_workers; ++i) {
         queues.push_back(std::make_shared<BoundedQueue<FrameTask>>(10));
@@ -229,14 +242,12 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
 
     // 3. Worker Logic with SMT Pinning
     auto worker_func = [&](int worker_id) {
+        
         // Lock this thread specifically to the physical core's logical threads
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        if (worker_id == 0) {
-            CPU_SET(sibling1, &cpuset);
-        } else {
-            CPU_SET(sibling2, &cpuset);
-        }
+        CPU_SET(sib[worker_id], &cpuset);
+        
         if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
             std::cerr << "Warning: Failed to pin worker " << worker_id << "\n";
         }

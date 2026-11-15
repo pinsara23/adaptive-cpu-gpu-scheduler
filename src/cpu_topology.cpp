@@ -77,3 +77,7 @@ void print_cpu_topology() {
         std::cout << (sib.size() > 1 ? "  (SMT)" : "  (single thread)") << "\n";
     }
 }
+
+std::vector<int> cpu_siblings(int cpu) {
+    return siblings_of(cpu);
+}

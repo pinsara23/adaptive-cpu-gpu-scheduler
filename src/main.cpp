@@ -64,7 +64,8 @@ int main(int argc, char** argv) {
         run_a1_single_core_pipeline(input_path, output_path);
     }
     else if (algo == "A2") {
-        run_a2_smt_pipeline(input_path, output_path);
+        int num_workers = (argc > 2) ? stoi(argv[2]) : 2;
+        run_a2_smt_pipeline(input_path, output_path, num_workers);
     }
     else if (algo == "A3") {
         int num_workers = 4; // Default number of workers

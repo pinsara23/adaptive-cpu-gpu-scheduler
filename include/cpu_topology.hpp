@@ -8,5 +8,8 @@
 // Only CPUs this process may run on are returned. Never empty.
 std::vector<int> cpu_assignment_order();
 
+// Logical CPUs sharing a physical core with `cpu` (including itself), sorted.
+std::vector<int> cpu_siblings(int cpu);
+
 // Prints the order and the sibling groups, for verification.
 void print_cpu_topology();

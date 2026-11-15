@@ -1,2 +1,0 @@
-# commit=a7f5768 mode=noenc uncommitted_files=0 governor=powersave profile=performance ac=1 malloc_tune=on build=Release
-algo,workers,run,total_s,sys_s,faults,maxrss_kb

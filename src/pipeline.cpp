@@ -51,15 +51,16 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
 
     auto start_time = chrono::steady_clock::now();
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
+    while (true) {
+        
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN");   
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");     
 
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
         task.input_frame = raw_frame;
-
-        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
 
         task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
                                               "CPU_MAIN", target_width, target_height);
@@ -83,9 +84,14 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
 
     tracer.flush();
 
+    if (total_frames > 0 && current_frame_id != total_frames) {
+        std::cerr << "WARNING: decoded " << current_frame_id
+                  << " frames but container reports " << total_frames << "\n";
+    }
 
     cout << "Pipeline A0 finished successfully.\n";
     cout << "Total Frames: " << current_frame_id << "\n";
+    cout << "Frames Emitted: " << current_frame_id << "\n";
     cout << "Loop Time:    " << loop_elapsed.count() << " seconds\n";
     cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
@@ -122,6 +128,11 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
     cv::VideoWriter writer(output_path, 
                            cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            fps, cv::Size(target_width, target_height), false);
+    
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
     int current_frame_id = 0;
     cv::Mat raw_frame;
@@ -130,15 +141,16 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
 
     // 3. Process video (locked to 1 core)
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
+    while (true) {
+
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_0");   
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_0");     
 
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
         task.input_frame = raw_frame;
-
-        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_0");
 
         task.output_frame = process_frame_cpu(task.input_frame, task.frame_id, tracer,
                                               "CPU_0", target_width, target_height);
@@ -163,9 +175,15 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
 
     tracer.flush();
 
+    if (total_frames > 0 && current_frame_id != total_frames) {
+        std::cerr << "WARNING: decoded " << current_frame_id
+                  << " frames but container reports " << total_frames << "\n";
+    }
+
 
     cout << "Pipeline A1 finished successfully.\n";
     cout << "Total Frames: " << current_frame_id << "\n";
+    cout << "Frames Emitted: " << current_frame_id << "\n";
     cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
@@ -189,11 +207,16 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
 
     TraceManager tracer("../traces/a2_trace.csv");
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
+
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
     FrameReorder reorder(writer, tracer, total_frames);
     
@@ -239,17 +262,24 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     cv::Mat raw_frame;
     auto start_time = std::chrono::steady_clock::now();
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
+    while (true) {
+        
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN");    
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");     
+
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame.clone(); // Ensure each task has its own copy of the frame
 
-        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
-        
+        tracer.recordEvent(task.frame_id, "copy", "start", "CPU_MAIN");        
+        task.input_frame = raw_frame.clone();
+        tracer.recordEvent(task.frame_id, "copy", "end", "CPU_MAIN");          
+
+        tracer.recordEvent(task.frame_id, "enqueue", "start", "CPU_MAIN");
         int target_worker = current_frame_id % num_workers;
         queues[target_worker]->push(task);
+        tracer.recordEvent(task.frame_id, "enqueue", "end", "CPU_MAIN");
         
         current_frame_id++;
         if (current_frame_id % 50 == 0) {
@@ -260,8 +290,8 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     for (auto& q : queues) q->finish();
     for (auto& t : threads) t.join();
 
-    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
-    reorder.finalize();
+    // Ensure buffer flushes and missing frames are logged before stopping the timer
+    bool ok = reorder.finalize(current_frame_id);
 
     cap.release(); 
     writer.release(); 
@@ -272,8 +302,10 @@ void run_a2_smt_pipeline(const std::string& input_path, const std::string& outpu
     tracer.flush();
 
 
-    std::cout << "Pipeline A2 finished successfully.\n";
+
+    std::cout << (ok ? "Pipeline A2 finished successfully.\n" : "Pipeline A2 finished WITH ERRORS.\n");
     std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Frames Emitted: " << reorder.frames_emitted() << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
@@ -282,11 +314,16 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     TraceManager tracer("../traces/a3_trace.csv");
     
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
+
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
     FrameReorder reorder(writer, tracer, total_frames);
     
@@ -321,18 +358,25 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     cv::Mat raw_frame;
     auto start_time = std::chrono::steady_clock::now();
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
+    while (true) {
+
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN");    
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");     
+
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame.clone(); // Ensure each task has its own copy of the frame
 
-        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
-        
+        tracer.recordEvent(task.frame_id, "copy", "start", "CPU_MAIN");        
+        task.input_frame = raw_frame.clone();
+        tracer.recordEvent(task.frame_id, "copy", "end", "CPU_MAIN");          
+
+        tracer.recordEvent(task.frame_id, "enqueue", "start", "CPU_MAIN");
         // Static Assignment Rule:
         int target_worker = current_frame_id % num_workers;
         queues[target_worker]->push(task);
+        tracer.recordEvent(task.frame_id, "enqueue", "end", "CPU_MAIN");
         
         current_frame_id++;
         if (current_frame_id % 50 == 0) {
@@ -345,7 +389,7 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
     for (auto& t : threads) t.join();
 
     // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
-    reorder.finalize();
+    bool ok = reorder.finalize(current_frame_id);
 
     cap.release(); 
     writer.release(); 
@@ -355,8 +399,9 @@ void run_a3_static_multicore_pipeline(const std::string& input_path, const std::
 
     tracer.flush();
 
-    std::cout << "Pipeline A3 finished successfully.\n";
+    std::cout << (ok ? "Pipeline A3 finished successfully.\n" : "Pipeline A3 finished WITH ERRORS.\n");
     std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Frames Emitted: " << reorder.frames_emitted() << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
@@ -372,11 +417,16 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     TraceManager tracer("../traces/a4_trace.csv");
 
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
+
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
     FrameReorder reorder(writer, tracer, total_frames);
 
@@ -407,16 +457,23 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     cv::Mat raw_frame;
     auto start_time = std::chrono::steady_clock::now();
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
+    while (true) {
+        
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN");    
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");     
+
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame.clone(); // Ensure each task has its own copy of the frame
 
-        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN");
+        tracer.recordEvent(task.frame_id, "copy", "start", "CPU_MAIN");        
+        task.input_frame = raw_frame.clone();
+        tracer.recordEvent(task.frame_id, "copy", "end", "CPU_MAIN");          
 
+        tracer.recordEvent(task.frame_id, "enqueue", "start", "CPU_MAIN");     
         shared_queue->push(task);
+        tracer.recordEvent(task.frame_id, "enqueue", "end", "CPU_MAIN");       
 
         current_frame_id++;
         if (current_frame_id % 50 == 0) {
@@ -428,8 +485,8 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
     shared_queue->finish();
     for (auto& t : threads) t.join();
 
-    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
-    reorder.finalize();
+    bool ok = reorder.finalize(current_frame_id);
+    
 
     cap.release(); 
     writer.release(); 
@@ -439,8 +496,9 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
 
     tracer.flush();
 
-    std::cout << "Pipeline A4 finished successfully.\n";
+    std::cout << (ok ? "Pipeline A4 finished successfully.\n" : "Pipeline A4 finished WITH ERRORS.\n");
     std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Frames Emitted: " << reorder.frames_emitted() << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
@@ -458,11 +516,16 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     TraceManager tracer("../traces/a5_trace.csv");
 
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
     cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
                            cap.get(cv::CAP_PROP_FPS), cv::Size(1280, 720), false);
+
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
     FrameReorder reorder(writer, tracer, total_frames);
 
@@ -512,18 +575,25 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
          std::cerr << "Warning: Failed to pin main thread to CPU " << online_cpus[0] << "\n";
     }
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
+    while (true) {
+
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN_PINNED");   
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN_PINNED");     
+
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = raw_frame.clone(); // Deep copy preserved
 
-        tracer.recordEvent(task.frame_id, "decode", "end", "CPU_MAIN_PINNED");
+        tracer.recordEvent(task.frame_id, "copy", "start", "CPU_MAIN_PINNED");        
+        task.input_frame = raw_frame.clone();
+        tracer.recordEvent(task.frame_id, "copy", "end", "CPU_MAIN_PINNED");          
         
+        tracer.recordEvent(task.frame_id, "enqueue", "start", "CPU_MAIN_PINNED");     
         int target_worker = current_frame_id % num_workers;
         queues[target_worker]->push(task);
-        
+        tracer.recordEvent(task.frame_id, "enqueue", "end", "CPU_MAIN_PINNED");       
+
         current_frame_id++;
         if (current_frame_id % 50 == 0) {
             std::cout << "Decoded & Dispatched " << current_frame_id << " / " << total_frames << " frames...\n";
@@ -533,8 +603,7 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     for (auto& q : queues) q->finish();
     for (auto& t : threads) t.join();
 
-    // NEW: Ensure buffer flushes and missing frames are logged before stopping the timer
-    reorder.finalize();
+    bool ok = reorder.finalize(current_frame_id);
     
     cap.release(); 
     writer.release(); 
@@ -544,8 +613,9 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
 
     tracer.flush();
 
-    std::cout << "Pipeline A5 finished successfully.\n";
+    std::cout << (ok ? "Pipeline A5 finished successfully.\n" : "Pipeline A5 finished WITH ERRORS.\n");
     std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Frames Emitted: " << reorder.frames_emitted() << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
@@ -554,7 +624,7 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
     TraceManager tracer("../traces/a6_trace.csv");
 
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     // FIX: Dynamically query available resources (Video Dimensions and FPS)
     int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
@@ -636,7 +706,7 @@ void run_a7_concurrent_pipeline(const std::string& input_path, const std::string
     TraceManager tracer("../traces/a7_trace.csv");
 
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
     int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
@@ -760,7 +830,7 @@ void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& ou
     TraceManager tracer("../traces/a8_trace.csv");
 
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) return;
+    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
     int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
     int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));

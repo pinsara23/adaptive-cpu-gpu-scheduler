@@ -22,7 +22,7 @@ prof=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo na)
 ac=$(cat /sys/class/power_supply/AC*/online 2>/dev/null | head -1)
 tune=on; [ -n "${HPC_NO_MALLOC_TUNE:-}" ] && tune=off
 btype=$(grep '^CMAKE_BUILD_TYPE' build/CMakeCache.txt | cut -d= -f2)
-echo "# commit=$commit uncommitted_files=$dirty governor=$gov profile=$prof ac=${ac:-na} malloc_tune=$tune build=$btype" | tee "$OUT"
+echo "# commit=$commit mode=$MODE uncommitted_files=$dirty governor=$gov profile=$prof ac=${ac:-na} malloc_tune=$tune build=$btype" | tee "$OUT"
 echo "algo,workers,run,total_s,sys_s,faults,maxrss_kb" >> "$OUT"
 
 run_one() {   # args: algo [workers] -> prints: total frames sys faults rss
@@ -30,8 +30,9 @@ run_one() {   # args: algo [workers] -> prints: total frames sys faults rss
   out=$(cd build && /usr/bin/time -o "$TMP" -f "%S %R %M" ./video_pipeline $1 $2 $EXTRA 2>>/tmp/bench_err.log)
   total=$(echo "$out"  | awk '/Total Time/   {print $3}')
   frames=$(echo "$out" | awk '/Total Frames/ {print $3}')
+  emitted=$(echo "$out" | awk '/Frames Emitted/ {print $3}')
   read -r sys faults rss < "$TMP"
-  echo "$total $frames $sys $faults $rss"
+  echo "$total $frames $sys $faults $rss $emitted"
 }
 
 echo "warm-up pass (discarded)..."
@@ -40,8 +41,8 @@ for spec in "${ALGOS[@]}"; do read -r a w <<< "$spec"; run_one "$a" "${w:-}" > /
 for r in $(seq 1 "$REPEATS"); do
   for spec in "${ALGOS[@]}"; do
     read -r a w <<< "$spec"
-    read -r total frames sys faults rss < <(run_one "$a" "${w:-}")
-    if [ -z "$total" ] || [ "$frames" != "$EXPECTED" ]; then
+    read -r total frames sys faults rss emitted < <(run_one "$a" "${w:-}")
+    if [ -z "$total" ] || [ "$frames" != "$EXPECTED" ] || [ "$emitted" != "$EXPECTED" ]; then
       echo "FAIL: $a run $r (total='$total' frames='$frames', expected $EXPECTED). See /tmp/bench_err.log"
       exit 1
     fi

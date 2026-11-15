@@ -7,6 +7,7 @@
 
 #include "gpu_pipeline.hpp"
 #include "cpu_topology.hpp"
+#include "config.hpp"
 
 using namespace std;
 
@@ -24,6 +25,13 @@ static void configure_allocator() {
 int main(int argc, char** argv) {
 
     configure_allocator();
+
+    int out = 1;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--no-encode") config::no_encode = true;
+        else argv[out++] = argv[i];
+    }
+    argc = out;
     
     //Enforce strict manual multithreading for accurate benchmarking
     cv::setNumThreads(1);
@@ -36,6 +44,11 @@ int main(int argc, char** argv) {
 
     string input_path = "../videos/input.mp4";
     string output_path = "../output/output_" + algo + ".mp4"; // Saves as output_A0.mp4, output_A1.mp4, etc.
+
+    if (config::no_encode) {
+        output_path = "../output/noencode_" + algo + ".mp4";   // never clobber real outputs
+        cout << "MODE: compute-only (encode skipped, output not written)\n";
+    }
 
     if (algo == "CUDA_INFO") {
         std::cout << "Querying GPU Hardware...\n";

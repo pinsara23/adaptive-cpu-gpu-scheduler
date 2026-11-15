@@ -18,6 +18,7 @@
 #include "gpu_pipeline.hpp"
 #include "cpu_pipeline.hpp"
 #include "config.hpp"
+#include "cpu_topology.hpp"
 
 using namespace std; 
 
@@ -64,7 +65,7 @@ void run_sequential_pipeline(const string& input_path, const std::string& output
                                               "CPU_MAIN", target_width, target_height);
         
         tracer.recordEvent(task.frame_id, "encode", "start", "CPU_MAIN");
-        writer.write(task.output_frame);
+        if (!config::no_encode) writer.write(task.output_frame);
         tracer.recordEvent(task.frame_id, "encode", "end", "CPU_MAIN");
 
         current_frame_id++;
@@ -143,7 +144,7 @@ void run_a1_single_core_pipeline(const std::string& input_path, const std::strin
                                               "CPU_0", target_width, target_height);
 
         tracer.recordEvent(task.frame_id, "encode", "start", "CPU_0");
-        writer.write(task.output_frame);
+        if (!config::no_encode) writer.write(task.output_frame);
         tracer.recordEvent(task.frame_id, "encode", "end", "CPU_0");
 
         current_frame_id++;
@@ -446,21 +447,13 @@ void run_a4_dynamic_multicore_pipeline(const std::string& input_path, const std:
 void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::string& output_path, int num_workers) {
     std::cout << "Executing A5: Thread-Pinned Multicore Pipeline with " << num_workers << " workers...\n";
     
-    // 1. Discover dynamically available CPUs instead of hardcoding 20
-    cpu_set_t available_cpus;
-    sched_getaffinity(0, sizeof(cpu_set_t), &available_cpus);
-    std::vector<int> online_cpus;
-    for (int i = 0; i < CPU_SETSIZE; ++i) {
-        if (CPU_ISSET(i, &available_cpus)) {
-            online_cpus.push_back(i);
-        }
-    }
-
-    if (online_cpus.empty()) {
-        online_cpus.push_back(0); // Safe fallback
-    }
-
+    std::vector<int> online_cpus = cpu_assignment_order();
+    
     std::cout << "Discovered " << online_cpus.size() << " online CPUs for pinning.\n";
+
+    std::cout << "A5 pinning: main -> CPU " << online_cpus[0] << ", workers ->";
+    for (int i = 0; i < num_workers; ++i) std::cout << " " << online_cpus[(i + 1) % online_cpus.size()];
+    std::cout << "\n";
 
     TraceManager tracer("../traces/a5_trace.csv");
 
@@ -614,7 +607,7 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
 
         // --- CPU STAGE 6: Encode ---
         tracer.recordEvent(current_frame_id, "encode", "start", "CPU_MAIN");
-        writer.write(sharp);
+        if (!config::no_encode) writer.write(sharp);
         tracer.recordEvent(current_frame_id, "encode", "end", "CPU_MAIN");
 
         current_frame_id++;
@@ -680,7 +673,7 @@ void run_a7_concurrent_pipeline(const std::string& input_path, const std::string
             tracer.recordEvent(task.frame_id, "sharpen", "end", "CPU_WRITER");
 
             tracer.recordEvent(task.frame_id, "encode", "start", "CPU_WRITER");
-            writer.write(sharp);
+            if (!config::no_encode) writer.write(sharp);
             tracer.recordEvent(task.frame_id, "encode", "end", "CPU_WRITER");
         }
         writer.release();

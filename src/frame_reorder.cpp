@@ -1,4 +1,5 @@
 #include "frame_reorder.hpp"
+#include "config.hpp"
 #include <iostream>
 
 FrameReorder::FrameReorder(cv::VideoWriter& writer, TraceManager& tracer, int total_frames, size_t max_capacity) 
@@ -20,7 +21,7 @@ void FrameReorder::push_and_write(FrameTask&& task) {
         FrameTask& ready_task = buffer_[next_expected_frame_id_];
         
         tracer_.recordEvent(ready_task.frame_id, "encode", "start", "CPU_MAIN");
-        writer_.write(ready_task.output_frame);
+        if (!config::no_encode) writer_.write(ready_task.output_frame);
         tracer_.recordEvent(ready_task.frame_id, "encode", "end", "CPU_MAIN");
         
         buffer_.erase(next_expected_frame_id_);
@@ -40,7 +41,7 @@ void FrameReorder::finalize() {
         for (auto& pair : buffer_) {
             std::cerr << "Recovery: Forced writing stranded out-of-order frame " << pair.first << "\n";
             tracer_.recordEvent(pair.first, "encode", "start", "CPU_MAIN_RECOVERY");
-            writer_.write(pair.second.output_frame);
+            if (!config::no_encode) writer_.write(pair.second.output_frame);
             tracer_.recordEvent(pair.first, "encode", "end", "CPU_MAIN_RECOVERY");
         }
         buffer_.clear();

@@ -6,10 +6,12 @@ set -u
 REPEATS=${1:-5}
 W=${2:-4}
 EXPECTED=${EXPECTED:-377}
+MODE=${MODE:-full}            # MODE=noenc runs compute-only (--no-encode)
+EXTRA=""; [ "$MODE" = "noenc" ] && EXTRA="--no-encode"
 ALGOS=("A0" "A1" "A2" "A3 $W" "A4 $W" "A5 $W")
 
 mkdir -p results
-OUT="results/cpu_bench_$(date +%Y%m%d_%H%M%S).csv"
+OUT="results/cpu_bench_${MODE}_$(date +%Y%m%d_%H%M%S).csv"
 TMP=$(mktemp)
 : > /tmp/bench_err.log
 
@@ -25,7 +27,7 @@ echo "algo,workers,run,total_s,sys_s,faults,maxrss_kb" >> "$OUT"
 
 run_one() {   # args: algo [workers] -> prints: total frames sys faults rss
   local out total frames sys faults rss
-  out=$(cd build && /usr/bin/time -o "$TMP" -f "%S %R %M" ./video_pipeline $1 $2 2>>/tmp/bench_err.log)
+  out=$(cd build && /usr/bin/time -o "$TMP" -f "%S %R %M" ./video_pipeline $1 $2 $EXTRA 2>>/tmp/bench_err.log)
   total=$(echo "$out"  | awk '/Total Time/   {print $3}')
   frames=$(echo "$out" | awk '/Total Frames/ {print $3}')
   read -r sys faults rss < "$TMP"

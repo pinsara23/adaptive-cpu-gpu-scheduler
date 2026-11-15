@@ -42,7 +42,11 @@ set(SOURCES
     src/cpu_topology.cpp
 )
 if(HPC_HAS_CUDA)
-    list(APPEND SOURCES src/gpu_pipeline.cu)
+    list(APPEND SOURCES
+        src/gpu_pipeline.cu
+        src/gpu_blur.cu
+        src/gpu_selftest.cpp      # uses GpuBlur5, so CUDA builds only
+    )
 endif()
 
 add_executable(video_pipeline ${SOURCES})
@@ -53,5 +57,6 @@ endif()
 
 target_compile_options(video_pipeline PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>   # optional: warnings for host code in .cu
 )
 target_link_libraries(video_pipeline ${OpenCV_LIBS} Threads::Threads)

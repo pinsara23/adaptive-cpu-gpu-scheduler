@@ -1,0 +1,14 @@
+PCIe transfer benchmark: 10 warm-up + 100 timed copies per row
+wall  = host clock around copy + sync (what a pipeline thread pays)
+event = GPU-side; for pageable memory it may miss the driver's staging copy
+
+size              host mem dir |  wall med  wall min  wall max | event med |    GB/s
+720p gray 0.92MB  pageable H2D |     0.121     0.115     0.345 |     0.116 |    7.62
+720p gray 0.92MB  pageable D2H |     0.172     0.163     0.532 |     0.167 |    5.36
+720p gray 0.92MB  pinned   H2D |     0.078     0.078     0.941 |     0.074 |   11.78
+720p gray 0.92MB  pinned   D2H |     0.075     0.075     0.120 |     0.071 |   12.21
+720p BGR 2.76MB   pageable H2D |     0.350     0.320     1.075 |     0.344 |    7.91
+720p BGR 2.76MB   pageable D2H |     0.418     0.389     1.002 |     0.413 |    6.62
+720p BGR 2.76MB   pinned   H2D |     0.276     0.259     1.055 |     0.271 |   10.02
+720p BGR 2.76MB   pinned   D2H |     0.288     0.279     0.733 |     0.282 |    9.58
+64 MiB            pageable H2D |     9.155     8.143    11.766 |     9.118 |    7.33

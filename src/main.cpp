@@ -1,5 +1,6 @@
 #include <iostream>
 #include <string>
+#include <stdexcept>
 #include "pipeline.hpp"
 #include <opencv2/core.hpp>
 #include <malloc.h>
@@ -8,6 +9,10 @@
 #include "gpu_pipeline.hpp"
 #include "cpu_topology.hpp"
 #include "config.hpp"
+#ifdef HPC_HAS_CUDA
+#include "gpu_blur.hpp"
+#include "gpu_selftest.hpp"
+#endif
 
 using namespace std;
 
@@ -32,12 +37,12 @@ int main(int argc, char** argv) {
         else argv[out++] = argv[i];
     }
     argc = out;
-    
-    //Enforce strict manual multithreading for accurate benchmarking
+
+    // Enforce strict manual multithreading for accurate benchmarking
     cv::setNumThreads(1);
-    
+
     // Default to A0 if the user doesn't type an algorithm name
-    string algo = "A0"; 
+    string algo = "A0";
     if (argc > 1) {
         algo = argv[1];
     }
@@ -62,8 +67,8 @@ int main(int argc, char** argv) {
     else if (algo == "A0") {
         cout << "Executing Algorithm A0: Sequential Baseline...\n";
         run_sequential_pipeline(input_path, output_path);
-    } 
-    else if (algo == "A1"){
+    }
+    else if (algo == "A1") {
         cout << "Executing Algorithm A1: Single Core Pipeline Baseline...\n";
         run_a1_single_core_pipeline(input_path, output_path);
     }
@@ -72,41 +77,42 @@ int main(int argc, char** argv) {
         run_a2_smt_pipeline(input_path, output_path, num_workers);
     }
     else if (algo == "A3") {
-        int num_workers = 4; // Default number of workers
-        if (argc > 2) {
-            num_workers = stoi(argv[2]);
-        }
+        int num_workers = (argc > 2) ? stoi(argv[2]) : 4;
         run_a3_static_multicore_pipeline(input_path, output_path, num_workers);
     }
     else if (algo == "A4") {
-        int num_workers = 4; // Default number of workers
-        if (argc > 2) {
-            num_workers = stoi(argv[2]);
-        }
+        int num_workers = (argc > 2) ? stoi(argv[2]) : 4;
         run_a4_dynamic_multicore_pipeline(input_path, output_path, num_workers);
     }
     else if (algo == "A5") {
-        int num_workers = 4; // Default number of workers
-        if (argc > 2) {
-            num_workers = stoi(argv[2]);
-        }
+        int num_workers = (argc > 2) ? stoi(argv[2]) : 4;
         run_a5_pinned_multicore_pipeline(input_path, output_path, num_workers);
     }
-    
+
 #ifdef HPC_HAS_CUDA
     else if (algo == "A6") {
-        // Make sure to declare void run_a6_gpu_pipeline(const std::string&, const std::string&); above main
         run_a6_gpu_pipeline(input_path, output_path);
     }
     else if (algo == "A7") {
         run_a7_concurrent_pipeline(input_path, output_path);
     }
     else if (algo == "A8") {
-        int num_workers = (argc > 3) ? std::stoi(argv[3]) : 8; // Default to 8 if not specified
+        // NOTE: reads argv[3], unlike A2-A5 (argv[2]); fixed in Stage 6
+        int num_workers = (argc > 3) ? std::stoi(argv[3]) : 8;
         run_a8_hybrid_pipeline(input_path, output_path, num_workers);
     }
+    else if (algo == "PCIE_BENCH") {
+        try { run_pcie_bench(); }
+        catch (const std::exception& e) { cerr << e.what() << "\n"; return 2; }
+        return 0;
+    }
+    else if (algo == "BLUR_CHECK") {
+        int tolerance = (argc > 2) ? stoi(argv[2]) : 0;
+        return run_gpu_blur_check(input_path, tolerance);
+    }
 #else
-    else if (algo == "A6" || algo == "A7" || algo == "A8") {
+    else if (algo == "A6" || algo == "A7" || algo == "A8" ||
+             algo == "PCIE_BENCH" || algo == "BLUR_CHECK") {
         cerr << "Error: " << algo << " needs CUDA, but this build has no CUDA support.\n";
         return -1;
     }
@@ -118,7 +124,7 @@ int main(int argc, char** argv) {
     }
     else {
         cerr << "Error: Unknown algorithm identifier '" << algo << "'\n";
-        cerr << "Usage: ./video_pipeline [A0|A1|A2...]\n";
+        cerr << "Usage: ./video_pipeline [A0..A8|CUDA_INFO|TOPO|PCIE_BENCH|BLUR_CHECK [tol]]\n";
         return -1;
     }
 

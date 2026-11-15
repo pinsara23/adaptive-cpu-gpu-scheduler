@@ -51,9 +51,13 @@ int main(int argc, char** argv) {
     }
 
     if (algo == "CUDA_INFO") {
+#ifdef HPC_HAS_CUDA
         std::cout << "Querying GPU Hardware...\n";
         print_cuda_device_info();
-        return 0; // Exit after printing info
+#else
+        std::cout << "Built without CUDA: no GPU information available.\n";
+#endif
+        return 0;
     }
     else if (algo == "A0") {
         cout << "Executing Algorithm A0: Sequential Baseline...\n";
@@ -88,6 +92,8 @@ int main(int argc, char** argv) {
         }
         run_a5_pinned_multicore_pipeline(input_path, output_path, num_workers);
     }
+    
+#ifdef HPC_HAS_CUDA
     else if (algo == "A6") {
         // Make sure to declare void run_a6_gpu_pipeline(const std::string&, const std::string&); above main
         run_a6_gpu_pipeline(input_path, output_path);
@@ -99,6 +105,13 @@ int main(int argc, char** argv) {
         int num_workers = (argc > 3) ? std::stoi(argv[3]) : 8; // Default to 8 if not specified
         run_a8_hybrid_pipeline(input_path, output_path, num_workers);
     }
+#else
+    else if (algo == "A6" || algo == "A7" || algo == "A8") {
+        cerr << "Error: " << algo << " needs CUDA, but this build has no CUDA support.\n";
+        return -1;
+    }
+#endif
+
     else if (algo == "TOPO") {
         print_cpu_topology();
         return 0;

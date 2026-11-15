@@ -7,7 +7,7 @@ md5_of() { ffmpeg -loglevel error -i "$1" -f framemd5 - | grep -v '^#' | awk -F,
 
 cd build || exit 1
 fail=0
-for spec in "A0" "A1" "A2" "A3 4" "A4 4" "A5 4"; do
+for spec in "A0" "A1" "A2 1" "A2 2" "A3 4" "A4 4" "A5 4"; do
   set -- $spec
   ./video_pipeline "$@" > "/tmp/run_$1.log" 2>&1
   md5_of "../output/output_$1.mp4" > "/tmp/$1.md5"

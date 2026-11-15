@@ -8,7 +8,7 @@ W=${2:-4}
 EXPECTED=${EXPECTED:-377}
 MODE=${MODE:-full}            # MODE=noenc runs compute-only (--no-encode)
 EXTRA=""; [ "$MODE" = "noenc" ] && EXTRA="--no-encode"
-ALGOS=("A0" "A1" "A2" "A3 $W" "A4 $W" "A5 $W")
+ALGOS=("A0" "A1" "A2 1" "A2 2" "A3 $W" "A4 $W" "A5 $W")
 
 mkdir -p results
 OUT="results/cpu_bench_${MODE}_$(date +%Y%m%d_%H%M%S).csv"

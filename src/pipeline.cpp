@@ -670,11 +670,14 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
 
     // GPU setup, excluded from timing like the writer setup. Allocating the pinned and
     // device buffers also creates the CUDA context.
+    const auto setup_t0 = std::chrono::steady_clock::now();
     GpuBlur5 gpu(W, H, 3);
     cv::Mat staged(H, W, CV_8UC3, gpu.host_in());    // resize writes here (pinned)
     cv::Mat blurred(H, W, CV_8UC3, gpu.host_out());  // GPU result lands here (pinned)
     staged.setTo(cv::Scalar::all(0));
     gpu.run_sync();   // warm-up: one-time costs (e.g. kernel loading) stay out of the timing
+    const double setup_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - setup_t0).count();
 
     struct FrameGpuTimes { int frame_id; GpuBlurTimings t; };
     std::vector<FrameGpuTimes> gpu_times;
@@ -746,6 +749,7 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
     std::cout << "Frames Emitted: " << current_frame_id << "\n";
     std::cout << "Loop Time:    " << loop_elapsed.count() << " seconds\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+    std::cout << "GPU Setup Time: " << setup_s << " seconds (excluded from Total Time)\n";
     std::printf("GPU blur per frame (median, CUDA events): H2D %.3f ms, kernels %.3f ms, "
                 "D2H %.3f ms, wall %.3f ms\n",
                 median_of(h2d), median_of(kern), median_of(d2h), median_of(wall));

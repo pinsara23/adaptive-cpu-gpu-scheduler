@@ -31,6 +31,15 @@ void print_cuda_device_info() {
         std::cout << "  Max Threads per Block:    " << device_prop.maxThreadsPerBlock << "\n";
         std::cout << "  Shared Memory per Block:  " << device_prop.sharedMemPerBlock / 1024 << " KB\n";
         std::cout << "  Concurrent Kernels:       " << (device_prop.concurrentKernels ? "Yes" : "No") << "\n";
+        std::cout << "  Copy engines (async):     " << device_prop.asyncEngineCount << "\n";
+        std::cout << "  L2 cache:                 " << device_prop.l2CacheSize / 1024 << " KB\n";
+        std::cout << "  Memory bus width:         " << device_prop.memoryBusWidth << " bit\n";
+        std::cout << "  Memory clock (reported):  " << device_prop.memoryClockRate / 1000 << " MHz\n";
+        std::cout << "  GPU clock (reported max): " << device_prop.clockRate / 1000 << " MHz\n";
+        std::cout << "  Registers per SM:         " << device_prop.regsPerMultiprocessor << "\n";
+        std::cout << "  Shared memory per SM:     " << device_prop.sharedMemPerMultiprocessor / 1024 << " KB\n";
+        std::cout << "  Max threads per SM:       " << device_prop.maxThreadsPerMultiProcessor << "\n";
+        std::cout << "  Warp size:                " << device_prop.warpSize << "\n";
     }
     std::cout << "\nCUDA verification successful.\n";
 }

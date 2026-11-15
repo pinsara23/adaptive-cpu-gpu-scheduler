@@ -630,6 +630,7 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
 
+#ifdef HPC_HAS_CUDA
 void run_a6_gpu_pipeline(const std::string& input_path, const std::string& output_path) {
     std::cout << "Executing A6: Sequential CPU-GPU Heterogeneous Pipeline...\n";
     TraceManager tracer("../traces/a6_trace.csv");
@@ -1021,3 +1022,4 @@ void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& ou
     std::cout << "Total Frames: " << current_frame_id << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
 }
+#endif // HPC_HAS_CUDA

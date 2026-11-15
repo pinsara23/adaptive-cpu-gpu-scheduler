@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <cstdio>
  
 
 #include "filters.hpp"
@@ -21,6 +22,9 @@
 #include "cpu_pipeline.hpp"
 #include "config.hpp"
 #include "cpu_topology.hpp"
+#ifdef HPC_HAS_CUDA
+#include "gpu_blur.hpp"
+#endif
 
 using namespace std; 
 
@@ -631,65 +635,77 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
 }
 
 #ifdef HPC_HAS_CUDA
+namespace {
+double median_of(std::vector<double> v) {
+    if (v.empty()) return 0.0;
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    return v[v.size() / 2];
+}
+}  // namespace
+
+// A6: Single-stream GPU baseline.
+// Same stages, resolution, parameters, timing boundary and output format as A0; the
+// blur runs on the GPU (GpuBlur5, bit-identical to cv::GaussianBlur). One thread, one
+// CUDA stream, synchronous: the CPU waits while the GPU works (no CPU-GPU overlap).
 void run_a6_gpu_pipeline(const std::string& input_path, const std::string& output_path) {
-    std::cout << "Executing A6: Sequential CPU-GPU Heterogeneous Pipeline...\n";
+    std::cout << "Executing A6: Single-Stream GPU Pipeline (blur on GPU)...\n";
     TraceManager tracer("../traces/a6_trace.csv");
 
     cv::VideoCapture cap(input_path);
-    if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
+    if (!cap.isOpened()) {
+        std::cerr << "Error: Could not open input video at " << input_path << "\n";
+        return;
+    }
+    const double fps = cap.get(cv::CAP_PROP_FPS);
+    const int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+    const int W = config::TARGET_WIDTH;
+    const int H = config::TARGET_HEIGHT;
 
-    // FIX: Dynamically query available resources (Video Dimensions and FPS)
-    int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
-    int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
-    int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
-    double fps = cap.get(cv::CAP_PROP_FPS);
+    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                           fps, cv::Size(W, H), false);
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
-    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
-                           fps, cv::Size(frame_width, frame_height), false);
+    // GPU setup, excluded from timing like the writer setup. Allocating the pinned and
+    // device buffers also creates the CUDA context.
+    GpuBlur5 gpu(W, H, 3);
+    cv::Mat staged(H, W, CV_8UC3, gpu.host_in());    // resize writes here (pinned)
+    cv::Mat blurred(H, W, CV_8UC3, gpu.host_out());  // GPU result lands here (pinned)
+    staged.setTo(cv::Scalar::all(0));
+    gpu.run_sync();   // warm-up: one-time costs (e.g. kernel loading) stay out of the timing
 
-    // FIX: Allocate VRAM dynamically based on the specific input video
-    unsigned char* d_in = nullptr;
-    unsigned char* d_out = nullptr;
-    allocate_device_memory(&d_in, &d_out, frame_width, frame_height, 3);
+    struct FrameGpuTimes { int frame_id; GpuBlurTimings t; };
+    std::vector<FrameGpuTimes> gpu_times;
+    gpu_times.reserve(total_frames > 0 ? total_frames : 1024);
 
     int current_frame_id = 0;
     cv::Mat raw_frame;
+
     auto start_time = std::chrono::steady_clock::now();
 
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
-        
+    while (true) {
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN");
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
         tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");
-        
-        // Deep copy for memory safety
-        cv::Mat input_frame = raw_frame.clone();
 
-        // --- CPU STAGE 1: Resize ---
         tracer.recordEvent(current_frame_id, "resize", "start", "CPU_MAIN");
-        cv::Mat resized = filters::resize_frame(input_frame, frame_width, frame_height);
+        filters::resize_into(raw_frame, staged, W, H);
         tracer.recordEvent(current_frame_id, "resize", "end", "CPU_MAIN");
+        CV_Assert(staged.data == gpu.host_in());   // must not have reallocated
 
-        // --- GPU STAGE 2: Custom CUDA Blur ---
-        // Dynamically size the OpenCV output matrix to match
-        cv::Mat blurred(frame_height, frame_width, CV_8UC3); 
-        launch_cuda_blur(resized.data, blurred.data, d_in, d_out, frame_width, frame_height, 3, tracer, current_frame_id);
+        tracer.recordEvent(current_frame_id, "blur", "start", "GPU_0");
+        const GpuBlurTimings t = gpu.run_sync();
+        tracer.recordEvent(current_frame_id, "blur", "end", "GPU_0");
+        gpu_times.push_back({current_frame_id, t});
 
-        // --- CPU STAGES 3, 4, 5: CLAHE, Sobel, Sharpen ---
-        tracer.recordEvent(current_frame_id, "clahe", "start", "CPU_MAIN");
-        cv::Mat clahe = filters::apply_clahe(blurred);
-        tracer.recordEvent(current_frame_id, "clahe", "end", "CPU_MAIN");
+        // Reading the pinned output directly is safe only because A6 is sequential:
+        // the next run_sync cannot overwrite it before these CPU stages finish.
+        cv::Mat out = process_tail_cpu(blurred, current_frame_id, tracer, "CPU_MAIN");
 
-        tracer.recordEvent(current_frame_id, "sobel", "start", "CPU_MAIN");
-        cv::Mat sobel = filters::apply_sobel(clahe);
-        tracer.recordEvent(current_frame_id, "sobel", "end", "CPU_MAIN");
-
-        tracer.recordEvent(current_frame_id, "sharpen", "start", "CPU_MAIN");
-        cv::Mat sharp = filters::apply_sharpen(sobel);
-        tracer.recordEvent(current_frame_id, "sharpen", "end", "CPU_MAIN");
-
-        // --- CPU STAGE 6: Encode ---
         tracer.recordEvent(current_frame_id, "encode", "start", "CPU_MAIN");
-        if (!config::no_encode) writer.write(sharp);
+        if (!config::no_encode) writer.write(out);
         tracer.recordEvent(current_frame_id, "encode", "end", "CPU_MAIN");
 
         current_frame_id++;
@@ -698,19 +714,41 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
         }
     }
 
+    auto loop_end = std::chrono::steady_clock::now();
+    cap.release();
+    writer.release();
     auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> loop_elapsed = loop_end - start_time;
     std::chrono::duration<double> elapsed = end_time - start_time;
 
-    // Clean up VRAM!
-    free_device_memory(d_in, d_out);
-    
-    cap.release(); 
-    writer.release(); 
     tracer.flush();
-    
+
+    // Per-frame GPU timings from CUDA events (written after timing stops).
+    std::vector<double> h2d, kern, d2h, wall;
+    std::ofstream csv("../traces/a6_gpu_timings.csv");
+    csv << "frame_id,h2d_ms,kernel_ms,d2h_ms,wall_ms\n";
+    for (const auto& g : gpu_times) {
+        csv << g.frame_id << ',' << g.t.h2d_ms << ',' << g.t.kernel_ms << ','
+            << g.t.d2h_ms << ',' << g.t.wall_ms << '\n';
+        h2d.push_back(g.t.h2d_ms);
+        kern.push_back(g.t.kernel_ms);
+        d2h.push_back(g.t.d2h_ms);
+        wall.push_back(g.t.wall_ms);
+    }
+
+    if (total_frames > 0 && current_frame_id != total_frames) {
+        std::cerr << "WARNING: decoded " << current_frame_id
+                  << " frames but container reports " << total_frames << "\n";
+    }
+
     std::cout << "Pipeline A6 finished successfully.\n";
     std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Frames Emitted: " << current_frame_id << "\n";
+    std::cout << "Loop Time:    " << loop_elapsed.count() << " seconds\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+    std::printf("GPU blur per frame (median, CUDA events): H2D %.3f ms, kernels %.3f ms, "
+                "D2H %.3f ms, wall %.3f ms\n",
+                median_of(h2d), median_of(kern), median_of(d2h), median_of(wall));
 }
 
 void run_a7_concurrent_pipeline(const std::string& input_path, const std::string& output_path) {

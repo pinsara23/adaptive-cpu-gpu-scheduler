@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# CPU benchmark: one discarded warm-up pass, then N interleaved repeats.
+# Benchmark: one discarded warm-up pass, then N interleaved repeats.
 # Usage (from repo root): bash scripts/bench_cpu.sh [repeats=5] [workers=4]
-# Env: EXPECTED=377 (frames the input must produce), HPC_NO_MALLOC_TUNE=1 (default allocator)
+# Env: MODE=full|noenc  EXPECTED=377  HPC_NO_MALLOC_TUNE=1 (default allocator)
+#      GPU=0 (skip GPU algorithms)  ONLY="A0;A6" (run only these specs, ';'-separated)
 set -u
 REPEATS=${1:-5}
 W=${2:-4}
 EXPECTED=${EXPECTED:-377}
 MODE=${MODE:-full}            # MODE=noenc runs compute-only (--no-encode)
 EXTRA=""; [ "$MODE" = "noenc" ] && EXTRA="--no-encode"
-ALGOS=("A0" "A1" "A2 1" "A2 2" "A3 $W" "A4 $W" "A5 $W")
+
+has_cuda=0
+if [ "${GPU:-1}" != "0" ] && ! (cd build && ./video_pipeline CUDA_INFO) | grep -q "Built without CUDA"; then
+  has_cuda=1
+fi
+if [ -n "${ONLY:-}" ]; then
+  IFS=';' read -ra ALGOS <<< "$ONLY"
+else
+  ALGOS=("A0" "A1" "A2 1" "A2 2" "A3 $W" "A4 $W" "A5 $W")
+  [ "$has_cuda" = 1 ] && ALGOS+=("A6")
+fi
 
 mkdir -p results
 OUT="results/cpu_bench_${MODE}_$(date +%Y%m%d_%H%M%S).csv"
@@ -22,10 +33,12 @@ prof=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo na)
 ac=$(cat /sys/class/power_supply/AC*/online 2>/dev/null | head -1)
 tune=on; [ -n "${HPC_NO_MALLOC_TUNE:-}" ] && tune=off
 btype=$(grep '^CMAKE_BUILD_TYPE' build/CMakeCache.txt | cut -d= -f2)
-echo "# commit=$commit mode=$MODE uncommitted_files=$dirty governor=$gov profile=$prof ac=${ac:-na} malloc_tune=$tune build=$btype" | tee "$OUT"
+gpu=none
+[ "$has_cuda" = 1 ] && gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | tr ' ' '_')
+echo "# commit=$commit mode=$MODE uncommitted_files=$dirty governor=$gov profile=$prof ac=${ac:-na} malloc_tune=$tune build=$btype gpu=${gpu:-na}" | tee "$OUT"
 echo "algo,workers,run,total_s,sys_s,faults,maxrss_kb" >> "$OUT"
 
-run_one() {   # args: algo [workers] -> prints: total frames sys faults rss
+run_one() {   # args: algo [workers] -> prints: total frames sys faults rss emitted
   local out total frames sys faults rss
   out=$(cd build && /usr/bin/time -o "$TMP" -f "%S %R %M" ./video_pipeline $1 $2 $EXTRA 2>>/tmp/bench_err.log)
   total=$(echo "$out"  | awk '/Total Time/   {print $3}')

@@ -7,6 +7,10 @@ namespace filters {
         return output;
     }
 
+    void resize_into(const cv::Mat& input, cv::Mat& output, int width, int height) {
+        cv::resize(input, output, cv::Size(width, height));   // identical call to resize_frame
+    }
+
     cv::Mat apply_blur(const cv::Mat& input) {
         cv::Mat output;
         cv::GaussianBlur(input, output, cv::Size(5, 5), 0);

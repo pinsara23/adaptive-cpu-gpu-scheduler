@@ -3,6 +3,9 @@
 
 namespace filters {
     cv::Mat resize_frame(const cv::Mat& input, int width, int height);
+    // Same operation as resize_frame, but writes into `output`. If `output` already has
+    // the target size and type, OpenCV reuses its buffer (e.g. pinned GPU staging memory).
+    void resize_into(const cv::Mat& input, cv::Mat& output, int width, int height);
     cv::Mat apply_blur(const cv::Mat& input);
     cv::Mat apply_clahe(const cv::Mat& input);
     cv::Mat apply_sobel(const cv::Mat& input);

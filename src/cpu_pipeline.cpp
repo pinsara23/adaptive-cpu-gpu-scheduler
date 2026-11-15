@@ -1,6 +1,25 @@
 #include "cpu_pipeline.hpp"
 #include "filters.hpp"
 
+cv::Mat process_tail_cpu(const cv::Mat& blurred,
+                         int frame_id,
+                         TraceManager& tracer,
+                         const std::string& resource) {
+    tracer.recordEvent(frame_id, "clahe", "start", resource);
+    cv::Mat clahe = filters::apply_clahe(blurred);
+    tracer.recordEvent(frame_id, "clahe", "end", resource);
+
+    tracer.recordEvent(frame_id, "sobel", "start", resource);
+    cv::Mat sobel = filters::apply_sobel(clahe);
+    tracer.recordEvent(frame_id, "sobel", "end", resource);
+
+    tracer.recordEvent(frame_id, "sharpen", "start", resource);
+    cv::Mat sharp = filters::apply_sharpen(sobel);
+    tracer.recordEvent(frame_id, "sharpen", "end", resource);
+
+    return sharp;
+}
+
 cv::Mat process_frame_cpu(const cv::Mat& input,
                           int frame_id,
                           TraceManager& tracer,
@@ -15,17 +34,5 @@ cv::Mat process_frame_cpu(const cv::Mat& input,
     cv::Mat blurred = filters::apply_blur(resized);
     tracer.recordEvent(frame_id, "blur", "end", resource);
 
-    tracer.recordEvent(frame_id, "clahe", "start", resource);
-    cv::Mat clahe = filters::apply_clahe(blurred);
-    tracer.recordEvent(frame_id, "clahe", "end", resource);
-
-    tracer.recordEvent(frame_id, "sobel", "start", resource);
-    cv::Mat sobel = filters::apply_sobel(clahe);
-    tracer.recordEvent(frame_id, "sobel", "end", resource);
-
-    tracer.recordEvent(frame_id, "sharpen", "start", resource);
-    cv::Mat sharp = filters::apply_sharpen(sobel);
-    tracer.recordEvent(frame_id, "sharpen", "end", resource);
-
-    return sharp;
+    return process_tail_cpu(blurred, frame_id, tracer, resource);
 }

@@ -91,7 +91,8 @@ int main(int argc, char** argv) {
 
 #ifdef HPC_HAS_CUDA
     else if (algo == "A6") {
-        run_a6_gpu_pipeline(input_path, output_path);
+        try { run_a6_gpu_pipeline(input_path, output_path); }
+        catch (const std::exception& e) { cerr << "A6 failed: " << e.what() << "\n"; return 2; }
     }
     else if (algo == "A7") {
         run_a7_concurrent_pipeline(input_path, output_path);

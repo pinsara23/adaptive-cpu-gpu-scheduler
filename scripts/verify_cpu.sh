@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs A0-A5 (and A6 when the build has CUDA) and compares decoded-frame md5s
+# Runs A0-A5 (and A6/A7 when the build has CUDA) and compares decoded-frame md5s
 # against the saved A0 reference.
 # Usage (from repo root): bash scripts/verify_cpu.sh
 set -u
@@ -11,7 +11,7 @@ specs=("A0" "A1" "A2 1" "A2 2" "A3 4" "A4 4" "A5 4")
 if ./video_pipeline CUDA_INFO | grep -q "Built without CUDA"; then
   echo "(CPU-only build: skipping GPU algorithms)"
 else
-  specs+=("A6")
+  specs+=("A6" "A7 1 1" "A7 4 2" "A7 8 8")
 fi
 
 fail=0
@@ -21,9 +21,9 @@ for spec in "${specs[@]}"; do
   md5_of "../output/output_$1.mp4" > "/tmp/$1.md5"
   n=$(wc -l < "/tmp/$1.md5")
   if [ "$n" -gt 0 ] && cmp -s "$REF" "/tmp/$1.md5"; then
-    echo "$1: identical ($n frames)  $(grep 'Total Time' /tmp/run_$1.log)"
+    echo "$spec: identical ($n frames)  $(grep 'Total Time' /tmp/run_$1.log)"
   else
-    echo "$1: DIFFERENT ($n frames)"; fail=1
+    echo "$spec: DIFFERENT ($n frames)"; fail=1
   fi
 done
 exit $fail

@@ -11,7 +11,9 @@
 #include <vector>
 #include <algorithm>
 #include <cstdio>
- 
+#include <cstdlib>
+#include <cstring>
+
 
 #include "filters.hpp"
 #include "frame_task.hpp"
@@ -24,6 +26,7 @@
 #include "cpu_topology.hpp"
 #ifdef HPC_HAS_CUDA
 #include "gpu_blur.hpp"
+#include "gpu_slot_pool.hpp"
 #endif
 
 using namespace std; 
@@ -755,128 +758,162 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
                 median_of(h2d), median_of(kern), median_of(d2h), median_of(wall));
 }
 
-void run_a7_concurrent_pipeline(const std::string& input_path, const std::string& output_path) {
-    std::cout << "Executing A7: Concurrent CPU-GPU Pipeline...\n";
+// A7: Fixed multi-stream GPU.
+// Same structure as A4 (main thread decodes into one shared bounded queue, M workers,
+// reorder buffer encodes in order) and the same stages; the blur runs on the GPU in
+// one of S stream slots. Host buffers belong to a worker, device buffers to a slot.
+void run_a7_multistream_pipeline(const std::string& input_path, const std::string& output_path,
+                                 int num_workers, int num_slots) {
+    std::cout << "Executing A7: Multi-Stream GPU Pipeline (" << num_workers << " workers, "
+              << num_slots << " GPU slots)...\n";
     TraceManager tracer("../traces/a7_trace.csv");
 
     cv::VideoCapture cap(input_path);
     if (!cap.isOpened()) { std::cerr << "Error: Could not open input video at " << input_path << "\n"; return; }
 
-    int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
-    int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
-    int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
-    double fps = cap.get(cv::CAP_PROP_FPS);
+    const int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+    const int W = config::TARGET_WIDTH;
+    const int H = config::TARGET_HEIGHT;
+    cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                           cap.get(cv::CAP_PROP_FPS), cv::Size(W, H), false);
+    if (!writer.isOpened()) {
+        std::cerr << "Error: Could not open output video for writing: " << output_path << "\n";
+        return;
+    }
 
-    // Queues: Capacity of 30 frames each to enforce backpressure
-    BoundedQueue<FrameTask> cpu_to_gpu_queue(30);
-    BoundedQueue<FrameTask> gpu_to_cpu_queue(30);
+    FrameReorder reorder(writer, tracer, total_frames);
+    auto shared_queue = std::make_shared<BoundedQueue<FrameTask>>(20);
 
-    auto start_time = std::chrono::steady_clock::now();
+    // GPU setup (excluded from Total Time, reported separately): S slots (stream + device
+    // buffers), one pinned input/output pair per worker, one warm-up frame per slot.
+    const auto setup_t0 = std::chrono::steady_clock::now();
+    GpuSlotPool pool(num_slots, W, H, 3);
+    const size_t bytes = static_cast<size_t>(W) * H * 3;
+    std::vector<std::unique_ptr<PinnedBuffer>> pin_in, pin_out;
+    for (int w = 0; w < num_workers; ++w) {
+        pin_in.push_back(std::make_unique<PinnedBuffer>(bytes));
+        pin_out.push_back(std::make_unique<PinnedBuffer>(bytes));
+    }
+    std::memset(pin_in[0]->data(), 0, bytes);
+    for (int s = 0; s < num_slots; ++s) pool.slot(s).run_sync(pin_in[0]->data(), pin_out[0]->data());
+    const double setup_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - setup_t0).count();
 
-    // --- THREAD 3: Writer Thread (CPU Post-Processing & I/O) ---
-    std::thread writer_thread([&]() {
-        cv::VideoWriter writer(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 
-                               fps, cv::Size(frame_width, frame_height), false);
-        
-        while (true) {
+    std::vector<std::string> slot_names;
+    for (int s = 0; s < num_slots; ++s) slot_names.push_back("GPU_S" + std::to_string(s));
+
+    struct GpuRecord { int frame_id; int worker; int slot; double wait_ms; GpuBlurTimings t; };
+    std::vector<std::vector<GpuRecord>> records(num_workers);   // one per worker, no locking
+
+    auto worker_func = [&](int worker_id) {
+        try {
+            const std::string name = "CPU_W" + std::to_string(worker_id);
+            cv::Mat staged(H, W, CV_8UC3, pin_in[worker_id]->data());    // this worker's pinned input
+            cv::Mat blurred(H, W, CV_8UC3, pin_out[worker_id]->data());  // this worker's pinned output
+            auto& my_records = records[worker_id];
             FrameTask task;
-            gpu_to_cpu_queue.pop(task);
-            
-            if (task.frame_id == -1) break; // Poison pill terminates thread
 
-            tracer.recordEvent(task.frame_id, "clahe", "start", "CPU_WRITER");
-            cv::Mat clahe = filters::apply_clahe(task.output_frame);
-            tracer.recordEvent(task.frame_id, "clahe", "end", "CPU_WRITER");
+            while (shared_queue->pop(task)) {
+                tracer.recordEvent(task.frame_id, "resize", "start", name);
+                filters::resize_into(task.input_frame, staged, W, H);
+                tracer.recordEvent(task.frame_id, "resize", "end", name);
+                CV_Assert(staged.data == pin_in[worker_id]->data());
+                task.input_frame.release();
 
-            tracer.recordEvent(task.frame_id, "sobel", "start", "CPU_WRITER");
-            cv::Mat sobel = filters::apply_sobel(clahe);
-            tracer.recordEvent(task.frame_id, "sobel", "end", "CPU_WRITER");
+                tracer.recordEvent(task.frame_id, "gpu_wait", "start", name);
+                const auto w0 = std::chrono::steady_clock::now();
+                const int s = pool.acquire();
+                const double wait_ms = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - w0).count();
+                tracer.recordEvent(task.frame_id, "gpu_wait", "end", name);
 
-            tracer.recordEvent(task.frame_id, "sharpen", "start", "CPU_WRITER");
-            cv::Mat sharp = filters::apply_sharpen(sobel);
-            tracer.recordEvent(task.frame_id, "sharpen", "end", "CPU_WRITER");
+                tracer.recordEvent(task.frame_id, "blur", "start", slot_names[s]);
+                const GpuBlurTimings t = pool.slot(s).run_sync(staged.data, blurred.data);
+                pool.release(s);
+                tracer.recordEvent(task.frame_id, "blur", "end", slot_names[s]);
+                my_records.push_back({task.frame_id, worker_id, s, wait_ms, t});
 
-            tracer.recordEvent(task.frame_id, "encode", "start", "CPU_WRITER");
-            if (!config::no_encode) writer.write(sharp);
-            tracer.recordEvent(task.frame_id, "encode", "end", "CPU_WRITER");
-        }
-        writer.release();
-    });
-
-    // --- THREAD 2: GPU Worker Thread (PCIe & CUDA Compute) ---
-    std::thread gpu_thread([&]() {
-        unsigned char* d_in = nullptr;
-        unsigned char* d_out = nullptr;
-        allocate_device_memory(&d_in, &d_out, frame_width, frame_height, 3); // Pre-allocate VRAM
-
-        while (true) {
-            FrameTask task;
-            cpu_to_gpu_queue.pop(task);
-            
-            if (task.frame_id == -1) {
-                // Forward poison pill to Writer Thread and terminate
-                gpu_to_cpu_queue.push(std::move(task));
-                break;
+                // `blurred` is reused only by this worker's next frame, after this tail
+                // finishes; the tail writes new images, so output_frame never aliases it.
+                task.output_frame = process_tail_cpu(blurred, task.frame_id, tracer, name);
+                reorder.push_and_write(std::move(task));
             }
-
-            cv::Mat blurred(frame_height, frame_width, CV_8UC3); 
-            launch_cuda_blur(task.input_frame.data, blurred.data, d_in, d_out, frame_width, frame_height, 3, tracer, task.frame_id);
-
-            // Assign the blurred frame to output_frame, and explicitly free input_frame to save RAM!
-            task.output_frame = std::move(blurred);
-            task.input_frame.release(); 
-
-            gpu_to_cpu_queue.push(std::move(task)); // Zero-copy move to next queue
+        } catch (const std::exception& e) {
+            // A lost frame would stall the reorder buffer, so a worker error is fatal.
+            std::fprintf(stderr, "A7 worker %d failed: %s\n", worker_id, e.what());
+            std::_Exit(2);
         }
-        free_device_memory(d_in, d_out);
-    });
+    };
 
-    // --- THREAD 1: Main Reader Thread (CPU Pre-Processing) ---
+    std::vector<std::thread> threads;
+    for (int i = 0; i < num_workers; i++) threads.emplace_back(worker_func, i);
+
     int current_frame_id = 0;
     cv::Mat raw_frame;
-    
-    while (cap.read(raw_frame)) {
-        if (raw_frame.empty()) break;
-        
-        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_READER");
-        cv::Mat input_mat = raw_frame.clone(); // Deep copy once to prevent OpenCV data race
+    auto start_time = std::chrono::steady_clock::now();
 
-        tracer.recordEvent(current_frame_id, "resize", "start", "CPU_READER");
-        cv::Mat resized = filters::resize_frame(input_mat, frame_width, frame_height);
-        tracer.recordEvent(current_frame_id, "resize", "end", "CPU_READER");
+    while (true) {
+        tracer.recordEvent(current_frame_id, "decode", "start", "CPU_MAIN");
+        if (!cap.read(raw_frame) || raw_frame.empty()) break;
+        tracer.recordEvent(current_frame_id, "decode", "end", "CPU_MAIN");
 
-        // Construct the FrameTask exactly according to your struct
         FrameTask task;
         task.frame_id = current_frame_id;
         task.video_timestamp = cap.get(cv::CAP_PROP_POS_MSEC);
-        task.input_frame = std::move(resized);
 
-        cpu_to_gpu_queue.push(std::move(task)); // Push to GPU queue
+        tracer.recordEvent(task.frame_id, "copy", "start", "CPU_MAIN");
+        task.input_frame = raw_frame.clone();
+        tracer.recordEvent(task.frame_id, "copy", "end", "CPU_MAIN");
+
+        tracer.recordEvent(task.frame_id, "enqueue", "start", "CPU_MAIN");
+        shared_queue->push(task);
+        tracer.recordEvent(task.frame_id, "enqueue", "end", "CPU_MAIN");
 
         current_frame_id++;
         if (current_frame_id % 50 == 0) {
-            std::cout << "Read " << current_frame_id << " / " << total_frames << " frames...\n";
+            std::cout << "Decoded & Dispatched " << current_frame_id << " / " << total_frames << " frames...\n";
         }
     }
 
-    // Send Poison Pill to flush the queues and cleanly shutdown
-    FrameTask poison_pill;
-    poison_pill.frame_id = -1;
-    cpu_to_gpu_queue.push(std::move(poison_pill));
+    shared_queue->finish();
+    for (auto& t : threads) t.join();
 
-    // Wait for workers to finish
-    gpu_thread.join();
-    writer_thread.join();
+    bool ok = reorder.finalize(current_frame_id);
 
+    cap.release();
+    writer.release();
     auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
 
-    cap.release();
     tracer.flush();
-    
-    std::cout << "Pipeline A7 finished successfully.\n";
+
+    // Per-frame GPU timings and slot waits (written after timing stops).
+    std::vector<double> h2d, kern, d2h, wall, waits;
+    std::ofstream csv("../traces/a7_gpu_timings.csv");
+    csv << "frame_id,worker,slot,wait_ms,h2d_ms,kernel_ms,d2h_ms,wall_ms\n";
+    for (const auto& per_worker : records) {
+        for (const auto& r : per_worker) {
+            csv << r.frame_id << ',' << r.worker << ',' << r.slot << ',' << r.wait_ms << ','
+                << r.t.h2d_ms << ',' << r.t.kernel_ms << ',' << r.t.d2h_ms << ',' << r.t.wall_ms << '\n';
+            h2d.push_back(r.t.h2d_ms); kern.push_back(r.t.kernel_ms);
+            d2h.push_back(r.t.d2h_ms); wall.push_back(r.t.wall_ms);
+            waits.push_back(r.wait_ms);
+        }
+    }
+    double wait_mean = 0.0;
+    for (double w : waits) wait_mean += w;
+    if (!waits.empty()) wait_mean /= waits.size();
+
+    std::cout << (ok ? "Pipeline A7 finished successfully.\n" : "Pipeline A7 finished WITH ERRORS.\n");
     std::cout << "Total Frames: " << current_frame_id << "\n";
+    std::cout << "Frames Emitted: " << reorder.frames_emitted() << "\n";
     std::cout << "Total Time:   " << elapsed.count() << " seconds\n";
+    std::cout << "GPU Setup Time: " << setup_s << " seconds (excluded from Total Time)\n";
+    std::printf("GPU blur per frame (median, CUDA events): H2D %.3f ms, kernels %.3f ms, "
+                "D2H %.3f ms, wall %.3f ms\n",
+                median_of(h2d), median_of(kern), median_of(d2h), median_of(wall));
+    std::printf("GPU slot wait per frame: mean %.3f ms, median %.3f ms (max frames on GPU: %d)\n",
+                wait_mean, median_of(waits), std::min(num_workers, num_slots));
 }
 
 void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& output_path, int num_workers) {

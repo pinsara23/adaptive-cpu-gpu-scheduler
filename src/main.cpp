@@ -95,7 +95,23 @@ int main(int argc, char** argv) {
         catch (const std::exception& e) { cerr << "A6 failed: " << e.what() << "\n"; return 2; }
     }
     else if (algo == "A7") {
-        run_a7_concurrent_pipeline(input_path, output_path);
+        int workers = (argc > 2) ? stoi(argv[2]) : 4;
+        int slots = (argc > 3) ? stoi(argv[3]) : 2;
+        if (workers < 1 || slots < 1){
+            cerr << "Error: A7 needs workers >= 1 and slots >= 1 (usage: A7 <workers> <slots>)\n";           
+        }
+        try { 
+            run_a7_multistream_pipeline(input_path, output_path, workers, slots); 
+        }catch (const std::exception& e) { 
+            cerr << "A7 failed: " << e.what() << "\n"; return 2; 
+        }
+    }
+    else if (algo == "GPU_STREAM_BENCH") {
+        int frames      = (argc > 2) ? stoi(argv[2]) : 200;
+        int max_streams = (argc > 3) ? stoi(argv[3]) : 8;
+        try { run_gpu_stream_bench(frames, max_streams); }
+        catch (const std::exception& e) { cerr << e.what() << "\n"; return 2; }
+        return 0;
     }
     else if (algo == "A8") {
         // NOTE: reads argv[3], unlike A2-A5 (argv[2]); fixed in Stage 6
@@ -113,7 +129,7 @@ int main(int argc, char** argv) {
     }
 #else
     else if (algo == "A6" || algo == "A7" || algo == "A8" ||
-             algo == "PCIE_BENCH" || algo == "BLUR_CHECK") {
+             algo == "PCIE_BENCH" || algo == "BLUR_CHECK" || algo == "GPU_STREAM_BENCH") {
         cerr << "Error: " << algo << " needs CUDA, but this build has no CUDA support.\n";
         return -1;
     }

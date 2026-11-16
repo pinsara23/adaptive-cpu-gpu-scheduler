@@ -21,6 +21,8 @@ void run_a5_pinned_multicore_pipeline(const std::string& input_path, const std::
 
 void run_a6_gpu_pipeline(const std::string& input_path, const std::string& output_path);
 
-void run_a7_concurrent_pipeline(const std::string& input_path, const std::string& output_path);
+// A7: Fixed multi-stream GPU (num_workers CPU workers share num_slots GPU stream slots)  num_workers = threads, num_slots = cuda streams
+void run_a7_multistream_pipeline(const std::string& input_path, const std::string& output_path,
+                                 int num_workers, int num_slots);
 
 void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);

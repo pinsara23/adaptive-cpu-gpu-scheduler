@@ -41,9 +41,9 @@ echo "algo,workers,run,total_s,sys_s,faults,maxrss_kb" >> "$OUT"
 run_one() {   # args: spec words (algo [workers] [slots]) -> prints: total frames sys faults rss emitted
   local out total frames sys faults rss emitted
   out=$(cd build && /usr/bin/time -o "$TMP" -f "%S %R %M" ./video_pipeline "$@" $EXTRA 2>>/tmp/bench_err.log)
-  total=$(echo "$out"  | awk '/Total Time/   {print $3}')
-  frames=$(echo "$out" | awk '/Total Frames/ {print $3}')
-  emitted=$(echo "$out" | awk '/Frames Emitted/ {print $3}')
+  total=$(echo "$out"   | awk '/^Total Time:/     {print $3}')
+  frames=$(echo "$out"  | awk '/^Total Frames:/   {print $3}')
+  emitted=$(echo "$out" | awk '/^Frames Emitted:/ {print $3}')
   read -r sys faults rss < "$TMP"
   echo "$total $frames $sys $faults $rss $emitted"
 }

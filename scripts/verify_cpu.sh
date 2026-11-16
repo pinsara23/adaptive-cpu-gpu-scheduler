@@ -21,7 +21,7 @@ for spec in "${specs[@]}"; do
   md5_of "../output/output_$1.mp4" > "/tmp/$1.md5"
   n=$(wc -l < "/tmp/$1.md5")
   if [ "$n" -gt 0 ] && cmp -s "$REF" "/tmp/$1.md5"; then
-    echo "$spec: identical ($n frames)  $(grep 'Total Time' /tmp/run_$1.log)"
+    echo "$spec: identical ($n frames)  $(grep '^Total Time' /tmp/run_$1.log)"
   else
     echo "$spec: DIFFERENT ($n frames)"; fail=1
   fi

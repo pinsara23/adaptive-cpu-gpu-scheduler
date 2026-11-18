@@ -121,8 +121,12 @@ void run_a8_stage_pipeline(const std::string& input_path, const std::string& out
     const int slack = env_int("HPC_A8_SLACK", config::A8_POOL_SLACK);
     if (slack < 0) throw std::invalid_argument("HPC_A8_SLACK must be >= 0");
     const int K = num_resize + S + num_tail + slack;
-    const bool pin = env_int("HPC_A8_NO_PIN", 0) == 0;
-
+    
+    // Pinning is opt-in (Stage 6 finding): the plain P-then-E order put tail workers, and with
+    // them the serial encode, on E-cores (full mode ~13% slower, compute-only no gain).
+    // Default = unpinned, like A4/A7. HPC_A8_PIN=1 enables cpu_assignment_order() placement.
+    const bool pin = env_int("HPC_A8_PIN", 0) != 0;
+    
     std::cout << "Executing A8: CPU-GPU Stage Pipeline (" << num_tail << " tail workers, "
               << num_resize << " resize workers, " << S << " GPU streams, " << K
               << " pinned pairs)...\n";
@@ -158,7 +162,7 @@ void run_a8_stage_pipeline(const std::string& input_path, const std::string& out
             std::cerr << "Warning: A8 uses " << n_threads << " threads but only " << order.size()
                       << " CPUs are available; some threads share a CPU.\n";
     } else {
-        std::cout << "A8 pinning: disabled (HPC_A8_NO_PIN)\n";
+        std::cout << "A8 pinning: off (default; HPC_A8_PIN=1 enables)\n";    
     }
 
     // GPU setup (excluded from Total Time, reported separately): S slots (stream + device

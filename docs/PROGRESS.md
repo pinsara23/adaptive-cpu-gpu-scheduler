@@ -1,20 +1,20 @@
 # HPC Project Progress
 
 ## Current status
-- Current stage: Stage 5 (GPU) COMPLETE for the blur-only GPU path (5a, 5b, 5c verified and benchmarked, 2026-11-17). Next: user decision between Stage 6 (rebuild A8) and GPU roadmap step 2 (see Next steps)
-- Last updated: 2026-11-17
+- Current stage: Stage 6 (CPU-GPU overlap, A8) COMPLETE (2026-11-19): new A8 stage pipeline implemented, md5-identical to A0, benchmarked vs A4/A7 in both modes and at equal thread budgets; old A8 and old GPU blur path deleted. NEXT: GPU roadmap step 2 (BGR->gray, then resize on the GPU), then define A9
+- Last updated: 2026-11-19
 - Official CPU baseline v2 measured on commit b7a2a6c; re-confirmed on f477a60 and f6f573b (medians within noise). Day-to-day machine drift ~5% (A0 noenc 2.18-2.29 s): compare only within one interleaved bench run
-- Commits: de2736e + follow-up (CUDA optional build), f477a60 (5a), f6f573b (5b), 8030e35 (GPU setup time, extended CUDA_INFO), 46a308d (5c: A7 + GPU_STREAM_BENCH, old A7 removed), 9a49958 (bench/verify parsing fix)
+- Commits: de2736e + follow-up (CUDA optional build), f477a60 (5a), f6f573b (5b), 8030e35 (GPU setup time, extended CUDA_INFO), 46a308d (5c: A7 + GPU_STREAM_BENCH, old A7 removed), 9a49958 (bench/verify parsing fix), 275a896 (PROGRESS Stage 5), Stage 6 main commit (new A8, before dd0679f), dd0679f (A8 pinning opt-in), 9bf0be7 (Stage 6 benchmark CSVs + older result CSVs), ca1c818 (old 3x3 GPU path removed)
 
 ## Stage status
 | Stage | Status |
 |---|---|
 | 1 Environment | Done; all versions recorded below |
 | 2 Sequential pipeline (A0) | Done; verified; reference saved (~/hpc_ref/A0_ref.md5, A0_ref.mp4) |
-| 3 Timing and tracing | Done for A0-A7: frame_id, decode/copy/enqueue/stage/encode events, CSV export; A6/A7 also per-frame CUDA-event CSV; A7 traces gpu_wait. video_timestamp not yet exported |
+| 3 Timing and tracing | Done for A0-A8: frame_id, decode/copy/enqueue/stage/encode events, CSV export; A6/A7/A8 also per-frame CUDA-event CSV; A7 traces gpu_wait; A8 prints per-role stage summary. video_timestamp not yet exported |
 | 4 CPU algorithms (A1-A5) | Done; all bit-identical to A0; benchmarked in two modes |
 | 5 CUDA/GPU | Done (blur-only GPU path): exact GPU blur, error checks, BLUR_CHECK, PCIE_BENCH (5a); A6 single-stream (5b); A7 fixed multi-stream with slot pool and safe buffer reuse, GPU_STREAM_BENCH (5c). All GPU algorithms md5-identical to A0 |
-| 6 CPU-GPU overlap | Partial (pre-existing): A8 on old synchronous 3x3 GPU path; unverified. Old A7 (3-thread pipeline) deleted in 46a308d |
+| 6 CPU-GPU overlap (A8) | Done: stage pipeline (decode -> R resize -> GPU thread with S=2 async streams -> T tail -> reorder), pinned-pair pool ownership hand-off, md5-identical to A0 (incl. zero-slack stress), benchmarked both modes and at equal thread budgets |
 | 7-12 | Not started (correct per plan) |
 
 ## Algorithm status
@@ -28,40 +28,52 @@
 | A5 pinned | verified | topology-aware pinning: main CPU 0, workers 2,4,6,8 (one per P-core first) |
 | A6 single-stream GPU | verified, benchmarked | one thread, one stream, synchronous; blur on GPU (GpuBlur5), rest via process_tail_cpu; md5-identical to A0; 1.04x vs A0 both modes |
 | A7 fixed multi-stream GPU | verified, benchmarked | `A7 M S`: A4 structure, M CPU workers share S GPU stream slots; md5-identical to A0 (1/1, 4/2, 8/8); compute-only 1.04-1.09x vs A4 with same M; full mode = A4 (encode ceiling) |
-| A8 | partial, unverified | old 3x3 GPU path (gpu_pipeline.cu launch_cuda_blur); own stage chain; encode in writer thread; pinning uses raw CPU ids (SMT siblings shared) |
-| A9, A10, A11 | not started | after GPU baselines |
+| A8 CPU-GPU stage pipeline | verified, benchmarked | `A8 T R` (tail workers, resize workers; defaults 6 1; S=2 fixed); md5-identical to A0 (1/1, 6/1, 8/2, 8/2 with HPC_A8_SLACK=0); unpinned by default (HPC_A8_PIN=1 opt-in). Compute-only: = A7 at 9 threads, 1.06x vs A7 at 12 threads; best compute-only 5.40x vs A0 (8/2). Full: 2-4% faster than A4, still encode-bound |
+| A9, A10, A11 | not started | A9 after GPU roadmap step 2 (Finding 19) |
 
 ## Environment
 - Ubuntu 24.04.5 LTS, kernel 7.0.0-38-generic
-- NVIDIA driver 595.91.07 (CUDA 13.2 reported); nvcc 12.0.140; g++ 13.3.0; CMake 3.28.3; OpenCV 4.6.0
-- CPU: i7-12700H, 20 logical CPUs. P-cores with SMT: CPU pairs 0/1, 2/3, 4/5, 6/7, 8/9, 10/11 (max 4.6-4.7 GHz). E-cores: CPUs 12-19 (max 3.5 GHz). L2 11.5 MiB, L3 24 MiB
+- NVIDIA driver 595.91.07 (CUDA 13.2 reported); nvcc 12.0.140; g++ 13.3.0; CMake 3.28.3; OpenCV 4.6.0; C++17 (CMAKE_CXX_STANDARD / CMAKE_CUDA_STANDARD 17)
+- CPU: i7-12700H, 20 logical CPUs. P-cores with SMT: CPU pairs 0/1, 2/3, 4/5, 6/7, 8/9, 10/11 (max 4.6-4.7 GHz). E-cores: CPUs 12-19 (max 3.5 GHz). L2 11.5 MiB, L3 24 MiB. cpu_assignment_order() = 0,2,4,6,8,10,12-19,1,3,5,7,9,11
 - GPU (CUDA_INFO, 2026-11-16): RTX 3050 Laptop, compute capability 8.6, 16 SMs, 3770 MB usable VRAM, 80 W cap, concurrent kernels yes, 2 async copy engines, L2 1536 KB, memory bus 128-bit, reported memory clock 6001 MHz (nominal 192 GB/s via the CUDA-samples formula 2 x clock x bus/8; not verified for GDDR6), reported max GPU clock 1740 MHz (observed 1965 MHz under load in nvidia-smi), 65536 registers/SM, 100 KB shared memory/SM (48 KB/block default), 1536 max threads/SM, 1024 max threads/block, warp 32
 - PCIe (measured 2026-11-16): link is dynamic. Idle Gen 1 x8; under sustained transfer load Gen 4 x8. nvidia-smi 250 ms samples during PCIE_BENCH: 50 Gen1, 8 Gen2, 24 Gen4; width x8 in every sample (GPU reports max Gen4 x16, platform runs x8). After load ends the link stays Gen4 ~2 s, then steps down Gen2 -> Gen1
-- Build: Release (-O3), CUDA arch 86 (sm_86 cubin confirmed), -Wall -Wextra (host code in .cu also), warning-free
+- Build: Release (-O3), CUDA arch 86 (sm_86 cubin confirmed), -Wall -Wextra (host code in .cu also), warning-free (CUDA and CPU-only builds, 2026-11-19)
 - Power during benchmarks: AC, platform_profile=performance, governor=powersave (intel_pstate)
 - Repo on NTFS (ntfs3) volume; effect on I/O timing not tested
 - Input: videos/input.mp4, h264, 768x432, 12.5 fps, 377 frames (not in repo; record sha256 in README)
 
 ## Implemented files
-- CMakeLists.txt: default Release; optional CUDA (HPC_ENABLE_CUDA, auto-detected via check_language); defines HPC_HAS_CUDA when CUDA is available; GPU sources (gpu_pipeline.cu, gpu_blur.cu, gpu_selftest.cpp) only in CUDA builds
-- include/: bounded_queue.hpp, config.hpp, cpu_pipeline.hpp, cpu_topology.hpp, cuda_check.hpp, filters.hpp, frame_reorder.hpp, frame_task.hpp, gpu_blur.hpp, gpu_pipeline.hpp, gpu_selftest.hpp, gpu_slot_pool.hpp, pipeline.hpp, trace_manager.hpp
-- src/: cpu_pipeline.cpp, cpu_topology.cpp, filters.cpp, frame_reorder.cpp, gpu_blur.cu, gpu_pipeline.cu (old GPU path for A8 + CUDA_INFO), gpu_selftest.cpp (GPU files CUDA builds only), main.cpp, pipeline.cpp (A6-A8 inside #ifdef HPC_HAS_CUDA), trace_manager.cpp
+- CMakeLists.txt: default Release; optional CUDA (HPC_ENABLE_CUDA, auto-detected via check_language); defines HPC_HAS_CUDA when CUDA is available; GPU sources (gpu_pipeline.cu, gpu_blur.cu, gpu_selftest.cpp, a8_pipeline.cpp) only in CUDA builds
+- include/: bounded_queue.hpp, config.hpp, cpu_pipeline.hpp, cpu_topology.hpp, cuda_check.hpp, filters.hpp, frame_reorder.hpp, frame_task.hpp, gpu_blur.hpp, gpu_pipeline.hpp, gpu_selftest.hpp, gpu_slot_pool.hpp, pinned_pair_pool.hpp, pipeline.hpp, trace_manager.hpp
+- src/: a8_pipeline.cpp, cpu_pipeline.cpp, cpu_topology.cpp, filters.cpp, frame_reorder.cpp, gpu_blur.cu, gpu_pipeline.cu (CUDA_INFO only), gpu_selftest.cpp (GPU files CUDA builds only), main.cpp, pipeline.cpp (A0-A7; A6/A7 inside #ifdef HPC_HAS_CUDA), trace_manager.cpp
 - Stage 5a: cuda_check.hpp (CUDA_CHECK throws, CUDA_WARN for cleanup); gpu_blur.hpp/.cu (GpuBlur5: separable [1 4 6 4 1] kernels blur5_h/blur5_v, 32x8 blocks, non-blocking stream, 4 CUDA events; run_pcie_bench); gpu_selftest.hpp/.cpp (BLUR_CHECK). main.cpp commands PCIE_BENCH and BLUR_CHECK [tol]
 - Stage 5b: filters::resize_into; process_tail_cpu (CLAHE -> Sobel -> sharpen; process_frame_cpu = resize + blur + process_tail_cpu); run_a6_gpu_pipeline (traces/a6_trace.csv, traces/a6_gpu_timings.csv); A6 prints GPU Setup Time
 - Stage 5c: PinnedBuffer (RAII pinned host memory); GpuBlur5 optional own host buffers (own_host_buffers=false), run_sync(h_in, h_out) with caller's pinned buffers, async enqueue()/wait(); gpu_slot_pool.hpp (GpuSlotPool: S x GpuBlur5 without host buffers, acquire/release counting semaphore); run_a7_multistream_pipeline (`A7 M S`, defaults 4 2; traces/a7_trace.csv incl. gpu_wait; traces/a7_gpu_timings.csv with worker, slot, wait, H2D/kernel/D2H/wall; prints GPU Setup Time, GPU medians, slot wait mean/median); run_gpu_stream_bench (`GPU_STREAM_BENCH [frames=200] [max_streams=8]`); old run_a7_concurrent_pipeline deleted; main.cpp validates A7 args (>= 1)
+- Stage 6:
+  - bounded_queue.hpp: added non-blocking try_push (false if full or finished) and try_pop (false if empty); existing push/pop unchanged
+  - pinned_pair_pool.hpp (new): PinnedPairPool, K pinned in/out pairs (2.76 MB each), touched at setup, blocking acquire()/release() free list (A8 back-pressure point)
+  - a8_pipeline.cpp (new): run_a8_stage_pipeline(input, output, T, R). Threads: main = decode; R resize workers; 1 GPU thread (GpuSlotPool with S slots, async enqueue, completes oldest first); T tail workers (process_tail_cpu, then FrameReorder::push_and_write). Q1 BoundedQueue<FrameTask>(20); Q2/Q3 BoundedQueue<A8Packet>(K) carrying {frame_id, video_timestamp, pair index}. Traces: traces/a8_trace.csv (decode, enqueue, resize, blur per slot, clahe, sobel, sharpen, encode), traces/a8_gpu_timings.csv (frame, slot, pair, H2D/kernel/D2H events, submit-to-done host). Prints GPU Setup Time, GPU medians, per-role stage summary (busy, util, input wait, output wait in ms/frame). Env: HPC_A8_SLACK (spare pairs, default 4), HPC_A8_PIN=1 (opt-in pinning in cpu_assignment_order(): main, GPU, resize, tail)
+  - config.hpp: A8_GPU_STREAMS = 2, A8_POOL_SLACK = 4
+  - pipeline.hpp: run_a8_stage_pipeline declaration (old run_a8_hybrid_pipeline removed from pipeline.cpp)
+  - main.cpp: `A8 <tail> <resize>` (argv[2]/argv[3], defaults 6 1, validated >= 1, exceptions -> exit 2); A7 argument check now returns -1 (previously printed the error and continued)
+  - gpu_pipeline.hpp/.cu: only print_cuda_device_info (CUDA_INFO); old 3x3 kernel, allocate/free_device_memory, launch_cuda_blur deleted
+  - scripts/verify_cpu.sh: adds A8 1 1, A8 6 1, A8 8 2 and a stress run HPC_A8_SLACK=0 A8 8 2; md5 check factored into check()
 - CUDA_INFO prints copy engines, L2, memory bus/clock, GPU clock, registers/shared memory/threads per SM, warp size
-- scripts/: verify_cpu.sh (md5 vs A0 reference; A0, A1, A2 1, A2 2, A3-A5, plus A6, A7 1 1, A7 4 2, A7 8 8 when the build has CUDA; prints the full spec), bench_cpu.sh (warm-up, interleaved repeats, median/min/max, sys/faults/RSS, machine-state header incl. mode and GPU name, frames-emitted check, MODE=full|noenc, specs with up to 3 words e.g. "A7 8 4" shown as wk 8/4, default list adds A6 and "A7 W 2" with CUDA, GPU=0 to skip, ONLY="..." subset; result lines parsed with anchored patterns ^Total Time:, ^Total Frames:, ^Frames Emitted:), stage_means.py (per-stage n/mean/median from trace CSVs)
-- results/: baseline v2 CSVs (20261115_131917/132142); re-checks 20261116_0117/0119; f6f573b incl. A6 (20261116_013328/013619); A7 matrix cpu_bench_noenc_20261117_000557.csv and the full-mode run after it (9a49958); pcie_bench_20261116_*.txt
+- scripts/: verify_cpu.sh (see above), bench_cpu.sh (warm-up, interleaved repeats, median/min/max, sys/faults/RSS, machine-state header incl. mode and GPU name, frames-emitted check, MODE=full|noenc, specs with up to 3 words e.g. "A8 8 2" shown as wk 8/2, default list adds A6 and "A7 W 2" with CUDA, GPU=0 to skip, ONLY="..." subset; result lines parsed with anchored patterns ^Total Time:, ^Total Frames:, ^Frames Emitted:), stage_means.py (per-stage n/mean/median from trace CSVs)
+- results/ (committed in 9bf0be7 and later): baseline v2 CSVs (20261115_131917/132142); re-checks 20261116_0117/0119; f6f573b incl. A6 (20261116_013328/013619); A7 matrix cpu_bench_noenc_20261117_000557.csv and full 20261117_000656; Stage 6: cpu_bench_noenc_20261119_020224.csv, cpu_bench_full_20261119_020305.csv, cpu_bench_noenc_20261119_021031.csv (equal thread budget); pcie_bench_20261116_*.txt
 - Repo also has docs/PROGRESS.md (local copy of this file; keep in sync)
 
 ## Verified functionality
-- A0-A5 outputs bit-identical to A0 reference (decoded-frame md5, 377/377) after every change, including all Stage 5 work
+- A0-A5 outputs bit-identical to A0 reference (decoded-frame md5, 377/377) after every change, including all Stage 5 and Stage 6 work
 - A6 and A7 (1/1, 4/2, 8/8) outputs bit-identical to A0 reference (377/377); Frames Emitted = 377 in both modes. A7 8/8 is the buffer-race stress case
-- Every A0-A7 run reports Frames Emitted = 377 in both modes; reorder fails loudly on missing/stranded/duplicate frames
+- A8 (1/1, 6/1, 8/2, and 8/2 with HPC_A8_SLACK=0 = no spare pinned pairs) bit-identical to A0 reference (377/377), before and after the pinning change and after the old-GPU-path cleanup; Frames Emitted = 377 in both modes; the Q2/Q3 try_push invariant never fired (a failure aborts with exit code 2)
+- A8 logic was also exercised before hardware runs with a fake-GPU harness (async CPU blur with random 0-1.5 ms delay, checking reorder against a sequential reference): 4 configs x slack 4/0 x 3 runs, all in order and pixel-identical, no deadlock, slot acquire never blocked (development check only, not a measurement)
+- Every A0-A8 run reports Frames Emitted = 377 in both modes; reorder fails loudly on missing/stranded/duplicate frames
 - --no-encode mode: same processing, no write, real outputs untouched (writes noencode_*.mp4)
 - Allocator tuning: faults ~1.07M -> ~24k, sys ~1.0 s -> ~0.06 s, +3.5 MB peak RSS (A0)
 - Topology helper (TOPO command) matches lscpu; pinning verified via ps snapshots (A2)
-- CPU-only build (-DHPC_ENABLE_CUDA=OFF) compiles and links with all Stage 5 code; GPU commands (CUDA_INFO, A6-A8, PCIE_BENCH, BLUR_CHECK, GPU_STREAM_BENCH) print "needs CUDA" messages
+- CPU-only build (-DHPC_ENABLE_CUDA=OFF) compiles and links warning-free with all Stage 6 code; GPU commands (CUDA_INFO, A6-A8, PCIE_BENCH, BLUR_CHECK, GPU_STREAM_BENCH) print "needs CUDA" messages
+- CUDA_INFO still works after removing the old GPU path
 - OpenCV 4.6 getGaussianKernel(5, 0) = [1 4 6 4 1]/16 (measured)
 - GPU blur (GpuBlur5) BIT-IDENTICAL to filters::apply_blur: synthetic 37x23, 61x17, 1280x720 at 1 and 3 channels; video 377/377 frames, 0 / 1,042,329,600 differing elements (BLUR_CHECK)
 
@@ -89,11 +101,11 @@ Compute-only (--no-encode):
 | A5 | 4 | 0.722 | 0.720-0.730 | 3.05 |
 
 Other measurements:
-- Run-to-run noise ~1-5% under the benchmark protocol; single runs can be off by ~10%; day-to-day drift ~5%. Differences inside overlapping ranges are not reported as findings. A3 occasionally has a single outlier run (spread 16-18%); medians unaffected
+- Run-to-run noise ~1-5% under the benchmark protocol; single runs can be off by ~10% (2026-11-19 single runs up to ~30%); day-to-day drift ~5%. Differences inside overlapping ranges are not reported as findings. A3 occasionally has a single outlier run (spread 16-18%); medians unaffected. 2026-11-19 equal-budget run: A4 11 and A7 11/2 each had one slow first run (spread 48% / 30%), medians unaffected
 - A4 worker scaling, full: 1w 4.18 s, 2w 2.40, 3w 2.33, 4w 2.30, 6w 2.32, 8w 2.34 (plateau)
 - A4 worker scaling, compute-only: 1w 2.19, 2w 1.32, 4w 0.73, 6w 0.55, 8w 0.49
 - Per-stage times, A0 compute-only trace (2026-11-16, f6f573b, one run, mean ms): decode 0.188, resize 0.795, blur 1.019, clahe 2.592 (incl. cvtColor/clone/createCLAHE), sobel 0.787, sharpen 0.375; sum 5.757 ms ~= measured 5.78 ms/frame. Shares: clahe 45%, blur 18%, resize 14%, sobel 14%, sharpen 7%, decode 3%
-- Full-mode encode ~5.6-5.9 ms/frame (older trace)
+- Full-mode encode ~5.6-5.9 ms/frame (older trace); 6.29 ms (A4 4 full trace, 2026-11-19)
 - A4 8 workers compute-only, main thread per frame: decode wait 0.40, copy 0.23, enqueue wait 0.60 ms
 - RSS: ~143 MB (A0) to ~210-235 MB (4 workers)
 
@@ -133,7 +145,7 @@ PCIE_BENCH (10 warm-up + 100 timed copies per row; wall = host clock around copy
 - Ranges do not overlap in either mode -> reportable
 - Process resources (median, /usr/bin/time, whole process incl. setup): A6 sys 0.29 s full / 0.27 noenc (A0 0.06 / 0.05), faults ~30.5k / 28.5k (A0 ~24.2k / 22.3k), RSS 235 / 227 MB (A0 144 / 137)
 - A6 single-run GPU medians (CUDA events): H2D 0.312, kernels 0.133, D2H 0.283-0.286, wall 0.739-0.740 ms
-- GPU Setup Time, single runs across A6/A7: 0.105-0.22 s (typically ~0.11 s)
+- GPU Setup Time, single runs across A6/A7/A8: 0.105-0.23 s (typically ~0.11-0.13 s)
 
 Per-stage, compute-only traces (one run each, mean ms):
 | stage | A0 | A6 | diff |
@@ -184,36 +196,119 @@ A7 benchmark, full mode (same session):
 
 A7 slot waits, compute-only single runs (46a308d): 4/1 mean 0.043 ms/frame (median 0), 4/2 0.003-0.012, 8/1 1.062 (median 0.981), 8/4 0.004
 
+Per-stage under parallel load, compute-only traces (9a49958, 2026-11-17, one run each, mean ms):
+| stage | A0 | A4 4 | A7 4/2 |
+|---|---|---|---|
+| decode (main) | 0.192 | 0.270 | 0.278 |
+| copy (main) | - | 0.114 | 0.118 |
+| enqueue (main, incl. queue-full wait) | - | 1.357 | 1.260 |
+| resize | 0.806 | 1.004 (+25%) | 0.998 |
+| gpu_wait | - | - | 0.004 |
+| blur | 1.030 | 1.309 (+27%) | 0.978 (GPU, worker view) |
+| clahe | 2.637 | 3.235 (+23%) | 3.228 |
+| sobel | 0.818 | 1.247 (+52%) | 1.230 |
+| sharpen | 0.381 | 0.465 (+22%) | 0.457 |
+| worker stages total | 5.673 | 7.260 | 6.895 |
+
+## Test results: Stage 6 A8 (2026-11-19)
+Threads = all own threads (main + workers; A8 also counts resize threads and the GPU thread): A4 M -> M+1, A7 M/S -> M+1, A8 T/R -> T+R+2.
+
+Benchmark 1, compute-only (commit dd0679f, A8 unpinned, 5 repeats after warm-up, interleaved; results/cpu_bench_noenc_20261119_020224.csv):
+| algo | cfg | threads | median s | min-max | vs A0 | sys s | RSS MB |
+|---|---|---|---|---|---|---|---|
+| A0 | - | 1 | 2.249 | 2.186-2.280 | 1.00 | 0.04 | 137 |
+| A4 | 8 | 9 | 0.511 | 0.501-0.522 | 4.40 | 0.11 | 260 |
+| A7 | 8/2 | 9 | 0.472 | 0.466-0.481 | 4.77 | 0.29 | 341 |
+| A8 | 4/1 | 7 | 0.544 | 0.522-0.563 | 4.14 | 0.23 | 322 |
+| A8 | 6/1 | 9 | 0.459 | 0.453-0.469 | 4.90 | 0.24 | 348 |
+| A8 | 6/2 | 10 | 0.435 | 0.434-0.459 | 5.18 | 0.24 | 355 |
+| A8 | 8/2 | 12 | 0.416 | 0.405-0.422 | 5.40 | 0.26 | 381 |
+
+Benchmark 1, full mode (same session; results/cpu_bench_full_20261119_020305.csv):
+| algo | cfg | median s | min-max | vs A0 | sys s | RSS MB |
+|---|---|---|---|---|---|---|
+| A0 | - | 4.408 | 4.336-4.419 | 1.00 | 0.06 | 144 |
+| A4 | 8 | 2.394 | 2.374-2.426 | 1.84 | 0.13 | 269 |
+| A7 | 8/2 | 2.381 | 2.349-2.401 | 1.85 | 0.35 | 354 |
+| A8 | 4/1 | 2.305 | 2.295-2.341 | 1.91 | 0.26 | 333 |
+| A8 | 6/1 | 2.335 | 2.318-2.355 | 1.89 | 0.28 | 360 |
+| A8 | 6/2 | 2.335 | 2.309-2.353 | 1.89 | 0.29 | 366 |
+| A8 | 8/2 | 2.341 | 2.328-2.345 | 1.88 | 0.30 | 391 |
+
+Benchmark 2, equal thread budgets, compute-only (commit 9bf0be7, 5 repeats, interleaved; results/cpu_bench_noenc_20261119_021031.csv):
+| threads | algo | cfg | median s | min-max | vs A4 8 |
+|---|---|---|---|---|---|
+| 9 | A4 | 8 | 0.512 | 0.498-0.526 | 1.00 |
+| 9 | A7 | 8/2 | 0.477 | 0.471-0.510 | 1.07 |
+| 9 | A8 | 6/1 | 0.478 | 0.463-0.492 | 1.07 |
+| 12 | A4 | 11 | 0.467 | 0.446-0.669 | 1.10 |
+| 12 | A7 | 11/2 | 0.440 | 0.435-0.567 | 1.16 |
+| 12 | A8 | 8/2 | 0.417 | 0.404-0.421 | 1.23 |
+
+Pinning diagnostic (single session, 3 runs each, before dd0679f, when A8 was pinned by default; pinning order main, GPU, resize, tail in cpu_assignment_order(), so A8 6/1 tails on CPUs 6, 8, 10, 12, 13, 14):
+| config | mode | Total Time, 3 runs (s) |
+|---|---|---|
+| A8 6/1 pinned | full | 2.67-2.73 |
+| A8 6/1 unpinned | full | 2.25-2.29 |
+| A8 3/1 pinned (tails on P-cores 6, 8, 10) | full | 2.27-2.31 |
+| A4 4 | full | 2.35-2.43 |
+| A8 6/1 pinned | compute-only | 0.466-0.552 |
+| A8 6/1 unpinned | compute-only | 0.462-0.522 |
+- Encode stage from traces (one run each, full): A8 6/1 pinned mean 7.13 ms (median 6.80), A4 4 mean 6.29 ms (median 6.22). Total Time / 377: A8 pinned ~7.2 ms, A4 ~6.3 ms -> total time tracks encode time in both
+- Same A8 pinned trace: clahe mean 3.55 / median 3.94 ms, sobel 1.45 / 1.68 (median above mean: consistent with a fast/slow mix of P- and E-core workers; not verified per thread)
+
+A8 stage summaries (single runs, ms/frame; util = busy / (threads x Total Time)):
+| config | stage | busy | util | input wait | output wait |
+|---|---|---|---|---|---|
+| 6/1 noenc (unpinned) | decode | 0.483 | 38.6% | - | Q1 push 0.679 |
+| | resize x1 | 1.191 | 95.1% | Q1 pop 0.035 | pool 0.002 |
+| | gpu | 0.038 | 3.0% | Q2 pop 0.171 | GPU done 1.021 |
+| | tail x6 | 7.007 | 93.2% | Q3 pop 0.441 | reorder 0.002 |
+| 8/2 noenc (unpinned) | decode | 0.544 | 49.8% | - | Q1 push 0.450 |
+| | resize x2 | 1.612 | 73.7% | Q1 pop 0.072 | pool 0.418 |
+| | gpu | 0.051 | 4.7% | Q2 pop 0.043 | GPU done 0.956 |
+| | tail x8 | 8.153 | 93.3% | Q3 pop 0.454 | reorder 0.003 |
+| 4/1 full (unpinned) | decode | 0.301 | 4.8% | - | Q1 push 5.471 |
+| | resize x1 | 0.998 | 15.9% | Q1 pop 0.039 | pool 5.023 |
+| | gpu | 0.050 | 0.8% | Q2 pop 5.295 | GPU done 0.728 |
+| | tail x4 | 4.546 | 18.1% | Q3 pop 0.196 | reorder(+encode) 20.260 |
+- A8 GPU medians (CUDA events, single runs, 6/1 pinned): compute-only H2D 0.602, kernels 0.126, D2H 0.562, submit-to-done 1.332 ms; full H2D 0.350, kernels 0.125, D2H 0.315, submit-to-done 0.818 ms
+
 ## Findings (supported by data; mechanisms marked as hypotheses)
-1. Serial encode caps full-pipeline speedup at ~1.85-1.9x: encode ~5.9 ms/frame under the reorder lock ~= 6.1 ms/frame achieved; ceiling lifts when encode is removed (compute-only scales to 4.5x at 8 workers). Also caps all GPU algorithms in full mode (A7 = A4)
+1. Serial encode caps full-pipeline speedup at ~1.85-1.9x: encode ~5.9 ms/frame under the reorder lock ~= 6.1 ms/frame achieved; ceiling lifts when encode is removed (compute-only scales to 4.5x at 8 workers). Also caps all GPU algorithms in full mode (A7 = A4; A8 1.88-1.91x)
 2. Default glibc allocation cost ~1 s/run of kernel page-fault time; fixed with process-wide mallopt (HPC_NO_MALLOC_TUNE=1 restores default)
 3. Static vs dynamic vs pinned scheduling: no measurable difference on this workload (both modes)
 4. SMT: ~2% gain for filter-only work, 1.18x when encode and filters can overlap on the two hardware threads (mechanism = hypothesis; needs perf IPC)
 5. Confining FFmpeg decoder threads to the processing CPU (A1) costs 5% (full) / 10% (compute-only); moving decode off-core gains ~2%
 6. At 8 workers compute-only, workers (not the main thread) are the limit: main thread waits ~0.6 ms/frame on a full queue (cause untested: E-cores, memory bandwidth, or lock contention)
 7. Original A5 penalty (~25%) came from main thread and worker 0 sharing one physical core; fixed by topology-aware pinning
-8. An integer separable GPU implementation ([1 4 6 4 1], REFLECT_101, (S+128)>>8) reproduces OpenCV 4.6's 8-bit GaussianBlur(5x5, sigma 0) exactly; GPU correctness for blur needs no tolerance. Consequence: A6 and A7 end-to-end outputs are md5-identical to A0
+8. An integer separable GPU implementation ([1 4 6 4 1], REFLECT_101, (S+128)>>8) reproduces OpenCV 4.6's 8-bit GaussianBlur(5x5, sigma 0) exactly; GPU correctness for blur needs no tolerance. Consequence: A6, A7 and A8 end-to-end outputs are md5-identical to A0
 9. PCIe link is power-managed: Gen1 x8 idle, Gen4 x8 under load; pinned 64 MiB reaches ~9.7 GB/s (~62% of Gen4 x8 theoretical 15.75 GB/s). Pinned is ~1.3-1.5x faster than pageable at frame sizes
 10. For the blur-only GPU path, transfers are ~81% of GPU wall time per frame (kernels 0.133 ms). Reducing transferred bytes matters more than kernel speed
 11. A6 (blur on GPU, one stream, synchronous) is 1.04x faster than A0 in both modes. The gain is small because blur is ~18% of compute and its GPU time is mostly transfer
 12. In A6 the blur stage drops 1.019 -> 0.736 ms but CLAHE rises 2.592 -> 2.671 ms (+0.079). Hypothesis: blurred frame arrives by DMA into pinned memory and is cold in CPU caches. Test later with perf cache-miss counters
-13. GPU algorithms use more kernel time (+~0.15-0.22 s sys), page faults (+5-8k) and memory (+~80-90 MB RSS) than their CPU counterparts; measured process-wide, most likely CUDA context/runtime and pinned-buffer setup (outside Total Time)
-14. GPU setup (~0.11 s, up to 0.22 s) is about as large as or larger than the GPU gain on this 377-frame video (A6 0.08-0.15 s; A7 0.02-0.06 s compute-only). Including setup, GPU offload does not pay off on this short video; break-even for A6 estimated ~270-830 frames. Relevant to A10 (video length) and to the evaluation plan (longer videos)
+13. GPU algorithms use more kernel time (+~0.15-0.22 s sys), page faults (+5-8k) and memory (+~80-90 MB RSS) than their CPU counterparts; measured process-wide, most likely CUDA context/runtime and pinned-buffer setup (outside Total Time). A8 adds the pinned pair pool: RSS 322-391 MB vs A4 8 260 MB
+14. GPU setup (~0.11 s, up to 0.23 s) is about as large as or larger than the GPU gain on this 377-frame video (A6 0.08-0.15 s; A7 0.02-0.06 s compute-only). Including setup, GPU offload does not pay off on this short video; break-even for A6 estimated ~270-830 frames. Relevant to A10 (video length) and to the evaluation plan (longer videos)
 15. In A6 the GPU is busy ~13% of each frame; one synchronous host thread cannot feed multiple streams
 16. GPU-only stream scaling (GPU_STREAM_BENCH): 1.38x at S=2, 1.71-1.72x at S=4-8 (plateau ~0.40 ms/frame, ~2500 frames/s). Copy/compute overlap across streams is real but partial: combined copy throughput ~13.9 GB/s vs ~10 GB/s single-direction, i.e. H2D and D2H overlap only ~1.35-1.4x instead of 2x. Cause untested (hypotheses: bidirectional PCIe/host-memory limits, single-thread issue overhead); Nsight Systems timeline would show it
-17. A7 is faster than A4 in compute-only mode at both M: M=4 1.07-1.09x, M=8 1.04-1.06x (non-overlapping ranges). Best overall compute-only speedup so far: A7 8/2, 4.76x vs A0 (A4 8: 4.50x). The relative gain at M=4 is larger than A6 vs A0 (1.04x) although the same CPU blur is removed. Hypothesis: CPU blur is slower under 4-worker memory-bandwidth contention, so offloading it saves more; test by comparing per-stage blur time in a4 vs a0 traces
+17. A7 is faster than A4 in compute-only mode at both M: M=4 1.07-1.09x, M=8 1.04-1.06x (non-overlapping ranges). Partial explanation (single-run traces): with 4 workers EVERY CPU stage slows 22-52% vs A0 (resize +25%, blur +27%, clahe +23%, sobel +52%, sharpen +22%; cause untested: shared memory bandwidth/cache/clock), not only blur. CPU blur in A4 is therefore 1.31 ms, so offloading it saves ~0.33 ms/frame of worker time in A7 (vs 0.28 ms for A6 vs A0), ~5% of worker time (7.26 -> 6.90 ms). This accounts for most but not all of the 7-9% benchmark gain; remainder unexplained (traces are single runs from another session)
 18. Stream count barely matters for the blur-only pipeline: M=4 S=1/2/4 indistinguishable; M=8 S=1 ~2% slower than S>=2 (mean slot wait 1.06 ms/frame vs ~0.004 ms at S=4), S=2/4/8 equal. The GPU is far from saturated: the pipeline needs ~785 frames/s, one stream delivers ~1460 frames/s, S>=4 ~2500 frames/s. CPU stages are the limit. Open: why 1 ms wait/frame at 8/1 costs only ~2%
 19. Consequence for A9: with blur-only GPU work there is almost no stream-count tuning space (S=2 suffices). A meaningful A9 study needs a workload where GPU configuration matters (more stages on GPU, higher resolution, or both)
+20. Under 4-worker load the GPU blur costs the worker ~0.98 ms (A7 4/2 trace) vs ~0.74 ms in sequential A6; cause untested (slower copies under concurrent CPU memory traffic, sync/wake-up latency). A8 shows the same effect from the GPU thread's side: compute-only H2D/D2H 0.60/0.56 ms vs 0.35/0.32 ms in full mode (single runs)
+21. Topology-ordered pinning that is not role-aware hurts A8 in full mode by ~13%: with main, GPU and resize threads placed first, half of the 6 tail workers land on E-cores (12-14), and because encode runs in whichever tail worker completes the next frame, the serial encode sometimes runs on an E-core (encode mean 7.13 vs 6.29 ms in A4; Total Time / 377 tracks the encode mean in both). Unpinned (2.25-2.29 s) or all tails on P-cores (A8 3/1 pinned, 2.27-2.31 s) remove the penalty; in compute-only mode pinning makes no measurable difference. Consequence: placement must know which thread carries the serial critical path (motivation for role-aware placement in A10). A8 default is therefore unpinned (HPC_A8_PIN=1 opt-in)
+22. CPU-GPU stage pipeline vs frame-parallel, compute-only, equal thread budgets: at 9 threads A8 6/1 = A7 8/2 (0.478 vs 0.477 s, ranges overlap), both faster than A4 8; at 12 threads A8 8/2 0.417 s beats A7 11/2 0.440 s (1.06x) and A4 11 0.467 s (1.12x), non-overlapping. Best compute-only result so far: A8 8/2, 5.40x vs A0 (benchmark 1). Hypothesis (consistent with stage summaries, untested): in A7 each worker waits ~1 ms/frame for the GPU (Finding 20); in A8 only the dedicated GPU thread waits ("GPU done wait" ~0.96-1.02 ms), so tail workers never block on the GPU; at 9 threads A8 cannot benefit because 2 of its threads (GPU thread ~3% busy, single resize thread) are not tail workers
+23. A8 bottleneck structure (stage summaries, single runs): 6/1 is limited by both resize (95% util, 1 thread) and tail (93%); 8/2 is tail-limited (resize 74%, tail 93%). Pipeline model T / tail-busy predicts 8 / 8.15 ms = 1.02 ms/frame (~0.38 s for 377 frames) vs 0.417 s measured. Per-frame CPU stage costs rise with thread count (tail 7.0 -> 8.15 ms from 9 to 12 threads; resize 1.19 -> 1.61 ms with 2 resize workers), the same contention pattern as Finding 17. The GPU thread is ~3-5% busy: one GPU thread is enough for the blur-only path
+24. Full mode, A8 vs A4/A7 (benchmark 1): every A8 config (2.305-2.341 s) is faster than A4 8 (2.394 s; non-overlapping, 2-4%); vs A7 8/2 only A8 4/1 and 8/2 do not overlap. The fastest full-mode A8 is the one with the fewest threads (4/1). Stage summary 4/1 full: tails 18% busy and wait 20 ms/frame in reorder(+encode), i.e. still encode-bound (Finding 1). Hypothesis (untested): fewer busy threads leave more CPU/memory bandwidth for the serial encode
 
 ## Stage 5 decisions (2026-11-15)
 - M1 GPU blur definition: exact integer equivalent of cv::GaussianBlur(5x5, sigma 0): separable [1 4 6 4 1], BORDER_REFLECT_101, output (S + 128) >> 8. CONFIRMED: bit-identical, tolerance 0 (Finding 8)
-- Correctness checks: (a) per-stage: BLUR_CHECK; (b) end-to-end: GPU algorithms md5 vs A0 reference via verify_cpu.sh (A6, A7 confirmed). In-process --check remains the plan for later stages that are not bit-exact (resize, CLAHE)
-- M2: GPU algorithms use the same working resolution as the CPU path (1280x720). Done for A6, A7
+- Correctness checks: (a) per-stage: BLUR_CHECK; (b) end-to-end: GPU algorithms md5 vs A0 reference via verify_cpu.sh (A6, A7, A8 confirmed). In-process --check remains the plan for later stages that are not bit-exact (resize, CLAHE)
+- M2: GPU algorithms use the same working resolution as the CPU path (1280x720). Done for A6, A7, A8
 - Placement: R1 = blur only on GPU, BGR in/out (2.76 MB each way). Later options decided after measurements: R1b fuse BGR->gray into blur, R2 resize+blur, R3 +CLAHE (optional), R4 all stages
 - GPU code structure must allow changing which stages run on the GPU without a rewrite (needed by A10). Done for the blur/tail split via process_tail_cpu
 - GPU code keeps OpenCV out of .cu files; .cpp code uses gpu_blur.hpp via forward-declared CUDA handle types
 - Timing rule for GPU algorithms: GPU setup (CUDA context, buffers, one warm-up per stream) before the timer and reported as "GPU Setup Time"; GPU sub-stage times from CUDA events; Total Time boundary same as the matching CPU algorithm
-- Buffer ownership: A6 reuses one pinned in/out pair (safe because sequential). A7: device buffers belong to a slot, pinned host buffers belong to a worker (one frame at a time per worker), so no two in-flight frames share memory
+- Buffer ownership: A6 reuses one pinned in/out pair (safe because sequential). A7: device buffers belong to a slot, pinned host buffers belong to a worker (one frame at a time per worker), so no two in-flight frames share memory. A8: see below
 
 ## A7 definition (implemented in 46a308d; user chose option B + C on 2026-11-16)
 - Inputs: video, M CPU workers, S GPU stream slots (`A7 M S`, defaults 4 2; both >= 1). Output: same video as A0 (md5-identical), traces, per-frame GPU timings, GPU setup time, slot-wait stats
@@ -225,47 +320,67 @@ A7 slot waits, compute-only single runs (46a308d): 4/1 mean 0.043 ms/frame (medi
 - Worker error -> message + exit code 2 (a lost frame would stall the reorder buffer)
 - Option C: GPU_STREAM_BENCH (GPU-only stream scaling; auxiliary test, not an algorithm)
 
+## A8 definition (implemented in Stage 6; decisions D1-D4 = recommendations, user 2026-11-17; pinning default changed 2026-11-19)
+- Purpose: CPU-GPU overlapped STAGE pipeline (spec 7.3/7.4). Distinct from A7 (A7 = frame-parallel workers that each run all stages and block on the GPU); in A8 CPU and GPU work on different frames at the same time and no tail worker waits for the GPU
+- Inputs: video, T tail workers, R resize workers (`A8 T R`, defaults 6 1, both >= 1); S = config::A8_GPU_STREAMS = 2 (Finding 18); K = R + S + T + slack pinned pairs (slack = config::A8_POOL_SLACK = 4, env HPC_A8_SLACK). Output: same video as A0 (md5-identical), traces, per-frame GPU timings, GPU setup time, per-role stage summary
+- Data flow: main (decode, fresh Mat per read, no clone) -> Q1 BoundedQueue<FrameTask>(20) -> R resize workers (acquire pinned pair, then pop Q1, resize_into pair.in) -> Q2(K) -> GPU thread (up to S frames in flight on GpuSlotPool slots, async enqueue; waits on the oldest; pushes to Q3 only after wait() returns, i.e. after D2H) -> Q3(K) -> T tail workers (process_tail_cpu on pair.out, release pair, push_and_write) -> FrameReorder (encode inside push_and_write, D2 = as A4/A7)
+- Buffer ownership: one pinned in/out pair per frame from resize until the tail has finished; queue push = ownership transfer; at most K frames hold pairs and Q2/Q3 have capacity K, so pushes there never block (enforced with try_push; failure = invariant violation, exit 2)
+- Liveness: resize acquires the pair BEFORE popping Q1, so frames leave Q1 in decode order already owning a pair; overtaking bounded by (R-1)+(T-1) << reorder capacity 60. Tails release the pair before push_and_write, so a frame waiting in the reorder buffer holds no pinned memory
+- Shutdown: main closes Q1 at EOF; last resize worker closes Q2 (atomic counter); GPU thread drains in-flight frames and closes Q3; join; reorder.finalize(decoded count); any thread exception -> message + std::_Exit(2)
+- Timing: GPU setup (S slots, K pinned pairs allocated and touched, one warm-up per slot) before the timer, printed as GPU Setup Time; Total Time from after thread launch to writer released (same boundary as A4/A7)
+- Placement: unpinned by default (like A4/A7; Finding 21). HPC_A8_PIN=1: main, GPU thread, resize, tail in cpu_assignment_order() (D3), capture/writer opened before pinning so FFmpeg threads keep default affinity
+- Metrics: per-role busy ms/frame, utilisation = busy / (threads x Total Time), input wait (Q1/Q2/Q3 pop), output wait (Q1 push / pool / GPU done / reorder incl. encode); GPU CUDA-event medians and submit-to-done host time
+- Overheads: one extra hop per queue; GPU thread spins while waiting (default CUDA sync); pinned memory K x 5.5 MB (~72 MB at 6/1)
+
 ## GPU stage roadmap (plan, 2026-11-16; each step pending the previous step's measurements)
 - Goal: GPU covers more than blur. Blur-only is the starting point, not the final design: blur is ~18% of compute and needs a 2.76 MB round trip; A10 needs real stage-placement choices; A9 needs GPU-heavy work to tune (Finding 19)
 - Constraint: stage order resize -> blur -> CLAHE -> Sobel -> sharpen; GPU work must be contiguous. Splits: "front on GPU" (resize+blur+gray on GPU; ~1.0 MB up at 768x432 BGR, 0.92 MB down gray; ~32%+ of compute), "all on GPU" (needs CUDA CLAHE), "GPU-CPU-GPU" (not planned)
-- Step 1 (DONE, Stage 5): blur on GPU, A6 and A7
-- Step 2: add BGR->gray (R1b), then resize -> "front on GPU". Gray likely exact (to verify); resize likely needs a documented tolerance
+- Step 1 (DONE, Stage 5): blur on GPU, A6 and A7 (and A8 in Stage 6)
+- Step 2 (NEXT): add BGR->gray (R1b), then resize -> "front on GPU". Gray likely exact (to verify); resize likely needs a documented tolerance. Expected side effect for A8: the resize stage (95% util at 6/1) moves to the GPU, and transfers shrink (gray out instead of BGR)
 - Step 3: add Sobel and sharpen (3x3 stencils, likely exact with careful rounding/saturation; to verify); vehicle for the optional global-memory vs shared-memory tiling study
 - Step 4 (optional): CLAHE on GPU, only if measurements justify it (largest stage, ~45% of compute; largest development cost; tolerance expected)
 - Every added stage gets its own per-stage correctness check and CUDA-event timing before the next step
 - Custom CUDA kernels, not OpenCV's cv::cuda module (believed absent from the Ubuntu apt OpenCV 4.6 build)
 
 ## Design decisions
-- Shared CPU stage chain: process_frame_cpu() = resize + blur + process_tail_cpu() (cpu_pipeline.cpp); A0-A5 use process_frame_cpu, A6/A7 use process_tail_cpu after the GPU blur
-- Working resolution: config::TARGET_WIDTH/HEIGHT = 1280x720 (A0-A7)
+- Shared CPU stage chain: process_frame_cpu() = resize + blur + process_tail_cpu() (cpu_pipeline.cpp); A0-A5 use process_frame_cpu, A6/A7/A8 use process_tail_cpu after the GPU blur
+- Working resolution: config::TARGET_WIDTH/HEIGHT = 1280x720 (A0-A8)
 - Filters: GaussianBlur 5x5 sigma 0; CLAHE clip 2.0, 8x8 tiles (grayscale); Sobel 3x3 blended 0.5/0.5; sharpen 3x3 kernel; output grayscale mp4v
 - Timing: steady_clock; Total Time = first read to writer released; setup and trace flush excluded; GPU algorithms print GPU Setup Time
 - Process-wide malloc tuning in main.cpp (applies to all algorithms)
 - Two measurement modes: full (default; correctness and demo) and --no-encode (compute-only benchmarking)
-- Benchmark protocol: one discarded warm-up pass, >=5 interleaved repeats, report median + min/max, record machine state; compare only within one run (day-to-day drift ~5%)
-- Thread placement uses cpu_assignment_order(): one logical CPU per SMT core, then single-thread cores, then siblings (A5; A4/A7 unpinned)
+- Benchmark protocol: one discarded warm-up pass, >=5 interleaved repeats, report median + min/max, record machine state; compare only within one run (day-to-day drift ~5%). Compare parallel algorithms also at equal total thread counts (Stage 6)
+- Thread placement uses cpu_assignment_order(): one logical CPU per SMT core, then single-thread cores, then siblings (A5; A8 opt-in). A4/A7/A8 default unpinned. Placement must consider thread roles, not only topology (Finding 21)
 - cv::setNumThreads(1): OpenCV internal parallelism disabled; FFmpeg decoder threads remain (documented)
 - CPU parallelism is hand-written (std::thread, bounded queues, reorder buffer, pthread affinity); OpenMP not used (optional extension)
 - Reorder buffer always admits the next-expected frame (no deadlock); completeness checked against decoded count
 - CMake option HPC_ENABLE_CUDA (auto-detected); on other GPUs pass -DCMAKE_CUDA_ARCHITECTURES=<cc> (e.g. 75 expected for RTX 2060; confirm with CUDA_INFO)
 - GPU host buffers are pinned; GPU timing from CUDA events, plus host wall clock for what the calling thread pays
 - No extra host copies on the GPU path: resize writes into pinned input, CLAHE reads pinned output
-- Script output parsing uses anchored patterns (^Total Time: etc.); any new output line containing these words must not start with them
+- Script output parsing uses anchored patterns (^Total Time: etc.); any new output line containing these words must not start with them (A8 summary lines start with spaces or "A8 ")
+- New algorithms get their own source file (a8_pipeline.cpp; planned a9_*.cpp, a10_*.cpp, a11_*.cpp); pipeline.cpp keeps A0-A7
+- Work order (user decision 2026-11-17): Stage 6 (A8) -> GPU roadmap step 2 -> define A9
 
 ## Known issues / open items
-- A8 (Stage 6): old 3x3 kernel at native 768x432 via gpu_pipeline.cu launch_cuda_blur (no CUDA error checks, pageable synchronous copies on the default stream); own stage chain; not on shared code path; no frames-emitted check; allocates inside the GPU thread after start_time; pinning uses raw CPU indices (SMT siblings shared); FrameReorder gets total_frames from container metadata; reads worker count from argv[3]
+- A8 GPU thread waits on its oldest frame; a frame arriving in Q2 while a slot is free is submitted only after that wait returns (delay up to one GPU frame time with S=2). Optional fix: non-blocking GpuBlur5::ready() via cudaEventQuery; only if summaries show Q2 pop wait together with serial GPU work
+- A8 stage summary is per role, not per thread: P-core vs E-core tail workers are not distinguishable (optional: per-thread rows or a CPU column via sched_getcpu)
+- A8 GPU thread spins during "GPU done wait" (default CUDA sync); visible in user CPU time, not in the summary's busy column
+- A8 R=2 vs R=1 at T=6 not proven (ranges barely overlap); R/T/slack not swept systematically (optional; may belong to A10)
+- Role-aware placement (tails/encoding on P-cores, light threads on E-cores) and a dedicated writer thread on a P-core (D2 variant) untested: candidates for A10 (Finding 21)
+- Full-mode A8 gain mechanism (Finding 24) untested
+- All CPU stages slow 22-52% with 4 workers (Finding 17) and further with more threads (Finding 23); cause untested (perf: cache misses, memory bandwidth; per-core clock under load)
+- Unexplained remainder of A7 vs A4 gain (Finding 17); A7 GPU blur worker-view cost 0.98 vs 0.74 ms (Finding 20)
 - A7 M=8 S=1: 1 ms mean slot wait per frame costs only ~2%; cause open
-- A7 vs A4 relative gain larger than A6 vs A0 (Finding 17); hypothesis untested (run stage_means.py on a4_trace.csv vs a7_trace.csv vs sequential_trace.csv)
 - GPU stream overlap plateau (Finding 16) cause untested; Nsight Systems not yet used (check `which nsys`)
-- Spin vs blocking CUDA sync in worker threads untested (optional experiment)
+- Spin vs blocking CUDA sync in worker/GPU threads untested (optional experiment)
 - A6 full-mode saving per frame (0.40 ms) larger than compute-only (0.22 ms); cause untested
 - CLAHE slower in A6 than A0 (Finding 12); cause hypothesis untested
 - CUDA_INFO "max" GPU clock (1740 MHz) is below the observed 1965 MHz under load; use nvidia-smi for actual clocks
 - A0 hard-codes 1280x720 instead of config::TARGET_WIDTH/HEIGHT (same values)
-- H2D for 2.76 MB: ~0.31-0.44 ms inside pipelines vs 0.262 ms (event) in PCIE_BENCH; cause untested
+- H2D for 2.76 MB: ~0.31-0.60 ms inside pipelines vs 0.262 ms (event) in PCIE_BENCH; cause untested
 - 0.92 MB pinned D2H (12.25 GB/s) faster than 64 MiB pinned D2H (9.70 GB/s); hypothesis: small D2H stays in CPU LLC; untested
 - video_timestamp not exported to traces
-- Encode trace label in FrameReorder is "CPU_MAIN" although executed by worker threads
+- Encode trace label in FrameReorder is "CPU_MAIN" although executed by worker threads (hides which thread/core encoded; relevant to Finding 21)
 - Tracing overhead not measured (--no-trace flag planned)
 - NTFS vs ext4 effect on I/O not tested
 - Input/output paths hardcoded; working resolution not a CLI option (needed for large-video tests)
@@ -273,13 +388,14 @@ A7 slot waits, compute-only single runs (46a308d): 4/1 mean 0.043 ms/frame (medi
 - A0 and A1 Frames Emitted = loop count (sanity warning vs container metadata added)
 - Topology helper ignores L3/CCX groups (relevant on multi-CCD AMD Ryzen)
 - "CLAHE" stage time includes cvtColor, clone and createCLAHE per frame
-- Worker-count argument not validated for A3/A4/A5: 0 crashes A3/A5 (modulo by zero) and hangs A4; non-numeric input crashes (stoi). (A7 validates.) Optional fix
-- Fixed in 9a49958: bench_cpu.sh/verify_cpu.sh matched "Total Time" inside the "GPU Setup Time ... (excluded from Total Time)" line (bench FAIL with frames='')
+- Worker-count argument not validated for A3/A4/A5: 0 crashes A3/A5 (modulo by zero) and hangs A4. Non-numeric arguments crash every algorithm that takes numbers (stoi throws outside the try blocks), incl. A7/A8. Optional fix
+- Fixed in 9a49958: bench_cpu.sh/verify_cpu.sh matched "Total Time" inside the "GPU Setup Time ... (excluded from Total Time)" line
+- Fixed in Stage 6: A7 argument check did not return; old A8 issues (3x3 kernel, no CUDA error checks, pageable copies, raw CPU ids, metadata frame count) resolved by deletion
 
 ## Other machines (planned / optional)
 - Available: RTX 2060 desktop; AMD Ryzen PCs; one PC without NVIDIA GPU (CPU-only build, A0-A5)
 - Per machine: same input (check sha256), record lscpu/versions/power settings, run TOPO and compare with lscpu -e=CPU,CORE, make that machine's own A0 reference, verify_cpu.sh, bench both modes; keep result files tagged by machine. GPU machines: also CUDA_INFO, BLUR_CHECK, PCIE_BENCH with nvidia-smi link monitor, GPU_STREAM_BENCH
-- Compare patterns (encode ceiling, SMT effect, scheduler ties, GPU transfer share, stream overlap) more than raw times; software versions must be recorded
+- Compare patterns (encode ceiling, SMT effect, scheduler ties, GPU transfer share, stream overlap, stage-pipeline vs frame-parallel, effect of pinning on hybrid vs non-hybrid CPUs) more than raw times; software versions must be recorded
 
 ## Future evaluation goal (user decision 2026-11-15: max 100,000 frames)
 - End-of-project tests on several videos at 100, 1,000, 10,000 and 100,000 frames, multiple resolutions (e.g. 640x480, 1280x720, 1920x1080, 3840x2160 where feasible). 1,000,000 frames dropped (disk/time cost)
@@ -289,6 +405,7 @@ A7 slot waits, compute-only single runs (46a308d): 4/1 mean 0.043 ms/frame (medi
 - Needs before Stage 11: input-path and working-resolution CLI args, --no-trace (or periodic trace flush), per-video A0 references and frame counts in scripts, GPU VRAM check for large resolutions (~25 MB per 4K BGR frame). Longer videos also amortize GPU setup (Finding 14); higher resolutions increase GPU work (Finding 19)
 
 ## Next steps
-1. User decision: (a) Stage 6 next (rebuild A8 as a stage-pipelined CPU-GPU overlap baseline on GpuBlur5 at 1280x720, shared code, topology-aware pinning, frames-emitted check), keeping blur-only GPU work; or (b) GPU roadmap step 2 first (gray + resize on GPU) so A6-A8 and later A9 have more GPU work. Recommendation: (a) then (b) before A9
-2. Optional quick checks: stage_means.py on a0/a4/a7 compute-only traces (Finding 17 hypothesis); Nsight Systems timeline of A7 8 4 and GPU_STREAM_BENCH if nsys is available (Finding 16)
-3. Before A9: define its inputs/outputs/objective; ensure a workload where GPU configuration matters (Finding 19)
+1. GPU roadmap step 2 (NEXT, new chat): BGR->gray on the GPU (fused with blur, R1b) with its own correctness check (expected exact); then resize on the GPU ("front on GPU") with a documented tolerance and an in-process --check. Then re-run A6-A8 (A8 resize stage would move to the GPU; expect different bottleneck structure). Files to ask for first: include/gpu_blur.hpp, src/gpu_blur.cu, src/gpu_selftest.cpp, include/filters.hpp + src/filters.cpp (resize_into, apply_clahe), src/cpu_pipeline.cpp, include/cpu_pipeline.hpp, src/a8_pipeline.cpp, A6/A7 in src/pipeline.cpp
+2. Define A9 (inputs/outputs/objective/candidate space/overheads/evaluation) once the GPU workload has real configuration sensitivity (Finding 19)
+3. Optional A8 experiments (may move into A10): role-aware placement, dedicated writer thread on a P-core, GpuBlur5::ready() polling, per-thread summary rows, R/T/slack sweep
+4. Optional checks anytime: Nsight Systems timeline of A7 8 4, A8 8 2 and GPU_STREAM_BENCH if nsys is available (Findings 16, 20, 22); perf counters for the multi-worker slowdown (Findings 17, 23)

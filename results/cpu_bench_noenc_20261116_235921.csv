@@ -1,0 +1,4 @@
+# commit=46a308d mode=noenc uncommitted_files=0 governor=powersave profile=performance ac=1 malloc_tune=on build=Release gpu=NVIDIA_GeForce_RTX_3050_Laptop_GPU
+algo,workers,run,total_s,sys_s,faults,maxrss_kb
+A0,-,1,2.27974,0.04,22316,138888
+A4,4,1,0.73567,0.06,38205,202360

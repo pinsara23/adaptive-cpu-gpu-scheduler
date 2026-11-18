@@ -46,6 +46,26 @@ public:
         return true;
     }
 
+    // Stage 6: non-blocking variants (used by A8).
+    // try_push: returns false (item untouched) if the queue is full or finished.
+    bool try_push(T&& item) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (finished_ || queue_.size() >= max_size_) return false;
+        queue_.push(std::move(item));
+        cv_pop_.notify_one();
+        return true;
+    }
+
+    // try_pop: returns false immediately if the queue is empty (open or finished).
+    bool try_pop(T& item) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (queue_.empty()) return false;
+        item = std::move(queue_.front());
+        queue_.pop();
+        cv_push_.notify_one();
+        return true;
+    }
+
     void finish() {
         std::unique_lock<std::mutex> lock(mtx_);
         finished_ = true;

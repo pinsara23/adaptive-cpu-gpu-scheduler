@@ -98,7 +98,8 @@ int main(int argc, char** argv) {
         int workers = (argc > 2) ? stoi(argv[2]) : 4;
         int slots = (argc > 3) ? stoi(argv[3]) : 2;
         if (workers < 1 || slots < 1){
-            cerr << "Error: A7 needs workers >= 1 and slots >= 1 (usage: A7 <workers> <slots>)\n";           
+            cerr << "Error: A7 needs workers >= 1 and slots >= 1 (usage: A7 <workers> <slots>)\n"; 
+            return -1;          
         }
         try { 
             run_a7_multistream_pipeline(input_path, output_path, workers, slots); 
@@ -114,9 +115,14 @@ int main(int argc, char** argv) {
         return 0;
     }
     else if (algo == "A8") {
-        // NOTE: reads argv[3], unlike A2-A5 (argv[2]); fixed in Stage 6
-        int num_workers = (argc > 3) ? std::stoi(argv[3]) : 8;
-        run_a8_hybrid_pipeline(input_path, output_path, num_workers);
+        int tail   = (argc > 2) ? stoi(argv[2]) : 6;
+        int resize = (argc > 3) ? stoi(argv[3]) : 1;
+        if (tail < 1 || resize < 1) {
+            cerr << "Error: A8 needs tail >= 1 and resize >= 1 (usage: A8 <tail_workers> <resize_workers>)\n";
+            return -1;
+        }
+        try { run_a8_stage_pipeline(input_path, output_path, tail, resize); }
+        catch (const std::exception& e) { cerr << "A8 failed: " << e.what() << "\n"; return 2; }
     }
     else if (algo == "PCIE_BENCH") {
         try { run_pcie_bench(); }

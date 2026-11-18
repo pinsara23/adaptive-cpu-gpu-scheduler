@@ -25,4 +25,6 @@ void run_a6_gpu_pipeline(const std::string& input_path, const std::string& outpu
 void run_a7_multistream_pipeline(const std::string& input_path, const std::string& output_path,
                                  int num_workers, int num_slots);
 
-void run_a8_hybrid_pipeline(const std::string& input_path, const std::string& output_path, int num_workers);
+// A8: CPU-GPU overlapped stage pipeline (decode -> R resize -> GPU thread -> T tail -> reorder)
+void run_a8_stage_pipeline(const std::string& input_path, const std::string& output_path,
+                           int num_tail, int num_resize);

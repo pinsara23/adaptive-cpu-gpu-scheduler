@@ -46,6 +46,7 @@ if(HPC_HAS_CUDA)
         src/gpu_pipeline.cu
         src/gpu_blur.cu
         src/gpu_selftest.cpp      # uses GpuBlur5, so CUDA builds only
+        src/a8_pipeline.cpp
     )
 endif()
 
